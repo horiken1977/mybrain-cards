@@ -28,7 +28,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: scripts
           RECALL_LIMIT: ${{ github.event.inputs.limit || '3' }}
-          PAGES_TRIGGER_TOKEN: ${{ secrets.PAGES_TRIGGER_TOKEN }}
         run: python scripts/select_and_post.py
       - name: Publish docs/ to GitHub Pages
         run: |

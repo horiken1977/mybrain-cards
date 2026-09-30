@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/grade.py": {
+      "runtime": "python3.12"
+    }
+  }
+}

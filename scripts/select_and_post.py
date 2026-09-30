@@ -11,9 +11,8 @@ from lib import (
 )
 
 PAGES_URL = "https://horiken1977.github.io/mybrain-cards/"
-REPO = "horiken1977/mybrain-cards"
+GRADE_ENDPOINT = "https://mybrain-cards.vercel.app/api/grade"
 LIMIT = int(os.environ.get("RECALL_LIMIT", "3"))
-TRIGGER_TOKEN = os.environ.get("PAGES_TRIGGER_TOKEN", "")
 
 QUESTION_TEXT = {
     "recall": "本を見ずに、この考えを自分の言葉で説明してください。",
@@ -29,7 +28,6 @@ def build_question_entry(card, qtype, all_cards):
         "qtype": qtype,
         "title": html.escape(title(card)),
         "book": html.escape(book_name(card)),
-        "result": None,
     }
     if qtype == "fill":
         entry["claim_draft"] = html.escape(claim(card))
@@ -86,8 +84,10 @@ PAGE_TEMPLATE = """<!doctype html>
   <p id="done" class="done hidden">今日の分はすべて回答済みです。</p>
 
 <script>
-const TRIGGER_TOKEN = {trigger_token_js};
-const REPO = {repo_js};
+const GRADE_ENDPOINT = {grade_endpoint_js};
+const DATE = {date_js};
+
+function storageKey(card) {{ return 'recall:' + DATE + ':' + card; }}
 
 async function loadToday() {{
   const res = await fetch('today.json?_=' + Date.now());
@@ -115,42 +115,23 @@ function renderResult(container, result) {{
   container.appendChild(div);
 }}
 
-async function pollForResult(card, resultBox) {{
-  for (let i = 0; i < 20; i++) {{
-    await new Promise(r => setTimeout(r, 3000));
-    try {{
-      const data = await loadToday();
-      const q = data.questions.find(q => q.card === card);
-      if (q && q.result) {{
-        renderResult(resultBox, q.result);
-        return;
-      }}
-    }} catch (e) {{ /* ignore, keep polling */ }}
-  }}
-  resultBox.innerHTML = '<p class="error">結果の取得に時間がかかっています。少し待ってからページを再読み込みしてください。</p>';
-}}
-
 async function submitAnswer(q, answers, btn, resultBox) {{
   btn.disabled = true;
   btn.textContent = '送信中…';
   try {{
-    const resp = await fetch('https://api.github.com/repos/' + REPO + '/dispatches', {{
+    const resp = await fetch(GRADE_ENDPOINT, {{
       method: 'POST',
-      headers: {{
-        'Accept': 'application/vnd.github+json',
-        'Authorization': 'Bearer ' + TRIGGER_TOKEN,
-        'Content-Type': 'application/json',
-      }},
-      body: JSON.stringify({{
-        event_type: 'recall-answer',
-        client_payload: {{ date: {date_js}, card: q.card, qtype: q.qtype, answers: answers }},
-      }}),
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ date: DATE, card: q.card, qtype: q.qtype, answers: answers }}),
     }});
-    if (resp.status !== 204) {{
-      throw new Error('dispatch failed: ' + resp.status);
+    const result = await resp.json();
+    renderResult(resultBox, result);
+    if (result.ok) {{
+      try {{ localStorage.setItem(storageKey(q.card), JSON.stringify(result)); }} catch (e) {{ /* ignore */ }}
+    }} else {{
+      btn.disabled = false;
+      btn.textContent = '再送信';
     }}
-    resultBox.innerHTML = '<p>採点中です…（数秒〜数十秒かかります）</p>';
-    await pollForResult(q.card, resultBox);
   }} catch (e) {{
     resultBox.innerHTML = '<p class="error">送信に失敗しました: ' + e.message + '</p>';
     btn.disabled = false;
@@ -164,10 +145,12 @@ function renderQuestion(q, index) {{
 
   let inner = '<h2>Q' + (index + 1) + '. 「' + q.title + '」（' + q.book + '）</h2>';
 
-  if (q.result) {{
+  let cached = null;
+  try {{ cached = JSON.parse(localStorage.getItem(storageKey(q.card))); }} catch (e) {{ /* ignore */ }}
+  if (cached) {{
     inner += '<div class="result-box"></div>';
     section.innerHTML = inner;
-    renderResult(section.querySelector('.result-box'), q.result);
+    renderResult(section.querySelector('.result-box'), cached);
     return section;
   }}
 
@@ -204,7 +187,10 @@ const QTYPE_LABELS = {{ recall: '想起', apply: '適用', contrast: '対比・�
   const data = await loadToday();
   const container = document.getElementById('questions');
   data.questions.forEach((q, i) => container.appendChild(renderQuestion(q, i)));
-  if (data.questions.every(q => q.result)) {{
+  const allDone = data.questions.every(q => {{
+    try {{ return !!localStorage.getItem(storageKey(q.card)); }} catch (e) {{ return false; }}
+  }});
+  if (allDone) {{
     document.getElementById('done').classList.remove('hidden');
   }}
 }})();
@@ -236,8 +222,7 @@ def main():
 
     page = PAGE_TEMPLATE.format(
         date=date,
-        trigger_token_js=json.dumps(TRIGGER_TOKEN),
-        repo_js=json.dumps(REPO),
+        grade_endpoint_js=json.dumps(GRADE_ENDPOINT),
         date_js=json.dumps(date),
     )
     with open("docs/index.html", "w", encoding="utf-8") as f:
