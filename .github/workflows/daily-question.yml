@@ -7,7 +7,8 @@ on:
 
 permissions:
   issues: write
-  contents: read
+  contents: write
+  pages: write
 
 jobs:
   post:
@@ -17,8 +18,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Select due cards and open an Issue
+      - name: Select due cards, open an Issue, and build the Pages site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: scripts
         run: python scripts/select_and_post.py
+      - name: Publish docs/ to GitHub Pages
+        run: |
+          if [ -n "$(git status --porcelain docs/)" ]; then
+            git config user.name "recall-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add docs/
+            git commit -m "pages: recall page for $(date -u +%F)"
+            git push
+          fi
