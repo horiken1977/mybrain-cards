@@ -1,0 +1,24 @@
+name: Daily recall question
+
+on:
+  schedule:
+    - cron: "0 23 * * *"  # 23:00 UTC = 08:00 JST (next day)
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Select due cards and open an Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: scripts
+        run: python scripts/select_and_post.py

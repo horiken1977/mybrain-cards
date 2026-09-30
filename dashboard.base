@@ -1,0 +1,75 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("cards")'
+    - 'type == "card"'
+
+formulas:
+  overdue_days: 'if(next_review, (today() - date(next_review)).days, "")'
+
+properties:
+  book:
+    displayName: 本
+  status:
+    displayName: 状態
+  priority:
+    displayName: 優先度
+  last_reviewed:
+    displayName: 最終確認日
+  next_review:
+    displayName: 次回確認日
+  streak:
+    displayName: 連続合格
+  formula.overdue_days:
+    displayName: 期限超過日数
+
+views:
+  - type: table
+    name: 今日やる
+    filters:
+      and:
+        - 'next_review'
+        - 'date(next_review) <= today()'
+    order:
+      - file.name
+      - book
+      - status
+      - priority
+      - next_review
+      - formula.overdue_days
+      - streak
+    groupBy:
+      property: priority
+      direction: ASC
+  - type: table
+    name: 弱点（優先度高・未安定）
+    filters:
+      and:
+        - 'priority == "高"'
+        - 'status != "安定"'
+    order:
+      - file.name
+      - book
+      - status
+      - streak
+      - last_reviewed
+  - type: table
+    name: 状態別
+    order:
+      - file.name
+      - book
+      - priority
+      - next_review
+    groupBy:
+      property: status
+      direction: ASC
+  - type: table
+    name: 本別の進捗
+    order:
+      - file.name
+      - status
+      - streak
+      - next_review
+    groupBy:
+      property: book
+      direction: ASC

@@ -1,0 +1,38 @@
+name: Grade recall response
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: write
+
+jobs:
+  grade:
+    if: >
+      contains(github.event.issue.labels.*.name, 'recall') &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.login == github.event.issue.user.login
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Grade the answer and update cards
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          PYTHONPATH: scripts
+        run: python scripts/grade_and_update.py
+      - name: Commit updated cards
+        run: |
+          git config user.name "recall-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -- '*.md'
+          git diff --cached --quiet || git commit -m "recall: update card state from issue #${{ github.event.issue.number }}"
+          git push
