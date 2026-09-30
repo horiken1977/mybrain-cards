@@ -44,12 +44,14 @@ def parse_questions(issue_body):
     return qs
 
 
-def parse_answers(comment_body):
+def parse_answers(comment_body, num_questions):
     answers = {}
     for m in ANSWER_RE.finditer(comment_body):
         answers[m.group(1)] = m.group(2).strip()
-    if not answers and comment_body.strip():
-        # single-question shorthand: no "A1." prefix used
+    if not answers and comment_body.strip() and num_questions == 1:
+        # single-question shorthand: no "A1." prefix used (only safe when
+        # the issue has exactly one question, otherwise we can't tell which
+        # question the comment is answering)
         answers["1"] = comment_body.strip()
     return answers
 
@@ -88,8 +90,10 @@ def grade_with_claude(card_title, claim, evidence, qtype_label, answer):
 
 def handle_fill(card, answer):
     parts = [p.strip() for p in FILL_PART_RE.findall(answer)]
-    if len(parts) < 3:
-        parts = [answer.strip(), "", ""]
+    if len(parts) < 3 or any(len(p) < 2 for p in parts):
+        return (f"「{card['fm']['title']}」の回答をa)/b)/c)の3点に分けられませんでした。"
+                "カードは更新していません。お手数ですが、次の形式で書き直して再送してください：\n"
+                "a) 自分の言葉で1文\nb) なぜ自分に重要か\nc) 使う場面の具体的な状況")
     new_claim, why, scene = parts[0], parts[1], parts[2]
 
     body = card["body"]
@@ -161,7 +165,7 @@ def handle_graded(card, qtype, answer):
 def main():
     issue_body = get_issue_body()
     questions = parse_questions(issue_body)
-    answers = parse_answers(COMMENT_BODY)
+    answers = parse_answers(COMMENT_BODY, num_questions=len(questions))
 
     replies = []
     for qnum, meta in questions.items():
@@ -178,6 +182,13 @@ def main():
 
     if not replies:
         print("no matching answers found; leaving issue open")
+        if len(questions) > 1:
+            subprocess.run(
+                ["gh", "issue", "comment", ISSUE_NUMBER, "--body",
+                 "回答を認識できませんでした。質問が複数あるIssueでは、`A1.` `A2.` `A3.` のように"
+                 "番号を付けて回答してください（カードは変更していません）。"],
+                check=False,
+            )
         return
 
     comment = "\n\n---\n\n".join(replies)
