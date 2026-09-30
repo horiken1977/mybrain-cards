@@ -1,0 +1,42 @@
+name: Grade recall web response
+
+on:
+  repository_dispatch:
+    types: [recall-answer]
+
+permissions:
+  contents: write
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Grade the answer and update the card + today.json
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          PYTHONPATH: scripts
+        run: python scripts/grade_web_response.py
+      - name: Commit and push (retry once on conflict)
+        run: |
+          git config user.name "recall-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -- '*.md' docs/today.json
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "recall(web): update card state for ${{ github.event.client_payload.date }}"
+          for i in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "push failed, retrying after pulling..."
+            git pull --rebase
+          done
+          exit 1

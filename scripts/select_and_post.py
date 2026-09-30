@@ -1,91 +1,53 @@
-"""Pick today's cards, publish a readable page for them on GitHub Pages,
-and open a GitHub Issue to collect the answer (runs in GitHub Actions)."""
+"""Pick today's cards, publish an interactive page (docs/index.html +
+docs/today.json) on GitHub Pages, and fire a minimal notification Issue
+(runs in GitHub Actions)."""
 import html
 import json
 import os
 import subprocess
-
-LIMIT = int(os.environ.get("RECALL_LIMIT", "3"))
 from lib import (
     load_all_cards, select_cards, qtype_for, book_name, title, claim,
-    evidence, other_card_for_contrast, QTYPE_LABEL, today_jst,
+    other_card_for_contrast, today_jst,
 )
 
 PAGES_URL = "https://horiken1977.github.io/mybrain-cards/"
+REPO = "horiken1977/mybrain-cards"
+LIMIT = int(os.environ.get("RECALL_LIMIT", "3"))
+TRIGGER_TOKEN = os.environ.get("PAGES_TRIGGER_TOKEN", "")
 
 QUESTION_TEXT = {
-    "recall": "本を見ずに、この考えを**自分の言葉で説明**してください。",
-    "apply": "**今週の実際の場面を1つ挙げ**、その場面でこの考えをどう使うか説明してください。",
-    "contrast": "この考えと、下の別の考え方が**どこで対立・補完するか**を説明してください。",
-    "refute": "この考えが**成り立たない場面**を1つ挙げて説明してください。",
+    "recall": "本を見ずに、この考えを自分の言葉で説明してください。",
+    "apply": "今週の実際の場面を1つ挙げ、その場面でこの考えをどう使うか説明してください。",
+    "contrast": "この考えと、下の別の考え方がどこで対立・補完するかを説明してください。",
+    "refute": "この考えが成り立たない場面を1つ挙げて説明してください。",
 }
 
 
-def build_question(card, qtype, all_cards):
-    t = title(card)
-    b = book_name(card)
-    meta = {"card": card["path"].split("/")[-1], "qtype": qtype}
-    lines = [f"<!-- recall-meta: {json.dumps(meta, ensure_ascii=False)} -->"]
+def build_question_entry(card, qtype, all_cards):
+    entry = {
+        "card": os.path.basename(card["path"]),
+        "qtype": qtype,
+        "title": html.escape(title(card)),
+        "book": html.escape(book_name(card)),
+        "result": None,
+    }
     if qtype == "fill":
-        lines.append(f"### 「{t}」（{b}） — まだ内容が確定していないカードです")
-        lines.append("")
-        lines.append(f"> {claim(card)}")
-        lines.append("")
-        lines.append("次の3つを書いてください（採点はありません。今日はこの記入だけでOK）：")
-        lines.append("")
-        lines.append("a) この考えを自分の言葉で1文")
-        lines.append("b) なぜ自分に重要か（1行）")
-        lines.append("c) 使う場面の具体的な状況（1つ）")
+        entry["claim_draft"] = html.escape(claim(card))
+        entry["fields"] = ["claim", "why", "scene"]
     else:
-        lines.append(f"### 「{t}」（{b}） — {QTYPE_LABEL[qtype]}の問い")
-        lines.append("")
-        lines.append(QUESTION_TEXT[qtype])
+        text = QUESTION_TEXT[qtype]
         if qtype == "contrast":
             other = other_card_for_contrast(card, all_cards)
             if other:
-                lines.append("")
-                lines.append(f"比較対象：「{title(other)}」（{book_name(other)}） — {claim(other)}")
+                text += f"\n\n比較対象：「{title(other)}」（{book_name(other)}） — {claim(other)}"
             else:
-                lines.append("")
-                lines.append("（比較対象がまだないため、代わりに：この考えが役立たない場面も1つ挙げてください）")
-    return "\n".join(lines)
+                text += "\n\n（比較対象がまだないため、代わりに：この考えが役立たない場面も1つ挙げてください）"
+        entry["text"] = html.escape(text)
+        entry["fields"] = ["text"]
+    return entry
 
 
-def q_html(i, card, qtype, all_cards):
-    t = html.escape(title(card))
-    b = html.escape(book_name(card))
-    if qtype == "fill":
-        head = f"「{t}」（{b}） — 内容確定前のカードです"
-        body = f"""
-          <blockquote>{html.escape(claim(card))}</blockquote>
-          <p>次の3つを、回答用Issueに <code>A{i}.</code> として書いてください（採点はありません）：</p>
-          <ol>
-            <li>この考えを自分の言葉で1文</li>
-            <li>なぜ自分に重要か（1行）</li>
-            <li>使う場面の具体的な状況（1つ）</li>
-          </ol>
-        """
-    else:
-        head = f"「{t}」（{b}） — {QTYPE_LABEL[qtype]}の問い"
-        extra = ""
-        if qtype == "contrast":
-            other = other_card_for_contrast(card, all_cards)
-            if other:
-                extra = (f"<p class='sub'>比較対象：「{html.escape(title(other))}」"
-                         f"（{html.escape(book_name(other))}） — {html.escape(claim(other))}</p>")
-            else:
-                extra = "<p class='sub'>（比較対象がまだないため、代わりに：この考えが役立たない場面も1つ挙げてください）</p>"
-        body = f"<p>{QUESTION_TEXT[qtype].replace('**', '')}</p>{extra}"
-    return f"""
-    <section class="q">
-      <h2>Q{i}. {head}</h2>
-      {body}
-    </section>
-    """
-
-
-def build_page(date, questions_html, issue_url):
-    return f"""<!doctype html>
+PAGE_TEMPLATE = """<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -99,22 +61,154 @@ def build_page(date, questions_html, issue_url):
   section.q {{ background: #fff; border: 1px solid #e2e2e2; border-radius: 10px;
                padding: 16px 18px; margin-bottom: 16px; }}
   section.q h2 {{ font-size: 1.05rem; margin: 0 0 10px; }}
+  section.q .sub {{ color: #666; font-size: 0.85rem; margin: -6px 0 10px; }}
   blockquote {{ margin: 8px 0; padding: 8px 12px; background: #f4f4f4;
-                border-left: 3px solid #999; font-size: 0.95rem; }}
-  .sub {{ color: #555; font-size: 0.9rem; }}
-  ol {{ padding-left: 1.2em; }}
-  .answer-btn {{ display: block; text-align: center; background: #1a7f37; color: #fff;
-                 text-decoration: none; padding: 14px; border-radius: 8px; font-weight: 600;
-                 margin: 24px 0; }}
-  .hint {{ color: #777; font-size: 0.85rem; text-align: center; }}
+                border-left: 3px solid #999; font-size: 0.95rem; white-space: pre-wrap; }}
+  label {{ display: block; font-size: 0.85rem; color: #444; margin: 10px 0 4px; }}
+  textarea {{ width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #ccc;
+              border-radius: 6px; font-size: 0.95rem; font-family: inherit; resize: vertical; }}
+  button {{ display: block; width: 100%; background: #1a7f37; color: #fff; border: none;
+            text-decoration: none; padding: 13px; border-radius: 8px; font-weight: 600;
+            font-size: 1rem; margin-top: 14px; cursor: pointer; }}
+  button:disabled {{ background: #9bbfa6; cursor: default; }}
+  .result {{ margin-top: 12px; padding: 12px; border-radius: 8px; background: #eef8f0; }}
+  .result.fail {{ background: #fdecea; }}
+  .result .score {{ font-weight: 600; margin-bottom: 4px; }}
+  .error {{ color: #b3261e; font-size: 0.9rem; margin-top: 8px; }}
+  .done {{ text-align: center; color: #1a7f37; font-weight: 600; padding: 16px; }}
+  .hidden {{ display: none; }}
 </style>
 </head>
 <body>
   <h1>想起テスト</h1>
   <div class="date">{date}</div>
-  {questions_html}
-  <a class="answer-btn" href="{issue_url}">この下のリンク先で回答する →</a>
-  <p class="hint">回答はGitHub Issueのコメント欄に、A1. A2. A3. の形式で書いてください。</p>
+  <div id="questions"></div>
+  <p id="done" class="done hidden">今日の分はすべて回答済みです。</p>
+
+<script>
+const TRIGGER_TOKEN = {trigger_token_js};
+const REPO = {repo_js};
+
+async function loadToday() {{
+  const res = await fetch('today.json?_=' + Date.now());
+  return res.json();
+}}
+
+function scoreLabel(score) {{
+  return `${{score.total}}/8点（正確さ${{score.accuracy}}・具体例${{score.example}}・適用条件${{score.conditions}}・次の行動${{score.action}}）`;
+}}
+
+function renderResult(container, result) {{
+  container.innerHTML = '';
+  if (!result.ok) {{
+    container.innerHTML = '<p class="error">エラー: ' + (result.error || 'unknown') + '</p>';
+    return;
+  }}
+  if (result.type === 'fill') {{
+    container.innerHTML = '<div class="result">記入ありがとうございます。明日から出題します。</div>';
+    return;
+  }}
+  const div = document.createElement('div');
+  div.className = 'result ' + (result.passed ? 'pass' : 'fail');
+  div.innerHTML = '<div class="score">' + (result.passed ? '合格' : '不合格') + ' ' + scoreLabel(result.score) + '</div>' +
+                  '<div>' + (result.feedback || '') + '</div>';
+  container.appendChild(div);
+}}
+
+async function pollForResult(card, resultBox) {{
+  for (let i = 0; i < 20; i++) {{
+    await new Promise(r => setTimeout(r, 3000));
+    try {{
+      const data = await loadToday();
+      const q = data.questions.find(q => q.card === card);
+      if (q && q.result) {{
+        renderResult(resultBox, q.result);
+        return;
+      }}
+    }} catch (e) {{ /* ignore, keep polling */ }}
+  }}
+  resultBox.innerHTML = '<p class="error">結果の取得に時間がかかっています。少し待ってからページを再読み込みしてください。</p>';
+}}
+
+async function submitAnswer(q, answers, btn, resultBox) {{
+  btn.disabled = true;
+  btn.textContent = '送信中…';
+  try {{
+    const resp = await fetch('https://api.github.com/repos/' + REPO + '/dispatches', {{
+      method: 'POST',
+      headers: {{
+        'Accept': 'application/vnd.github+json',
+        'Authorization': 'Bearer ' + TRIGGER_TOKEN,
+        'Content-Type': 'application/json',
+      }},
+      body: JSON.stringify({{
+        event_type: 'recall-answer',
+        client_payload: {{ date: {date_js}, card: q.card, qtype: q.qtype, answers: answers }},
+      }}),
+    }});
+    if (resp.status !== 204) {{
+      throw new Error('dispatch failed: ' + resp.status);
+    }}
+    resultBox.innerHTML = '<p>採点中です…（数秒〜数十秒かかります）</p>';
+    await pollForResult(q.card, resultBox);
+  }} catch (e) {{
+    resultBox.innerHTML = '<p class="error">送信に失敗しました: ' + e.message + '</p>';
+    btn.disabled = false;
+    btn.textContent = '再送信';
+  }}
+}}
+
+function renderQuestion(q, index) {{
+  const section = document.createElement('section');
+  section.className = 'q';
+
+  let inner = '<h2>Q' + (index + 1) + '. 「' + q.title + '」（' + q.book + '）</h2>';
+
+  if (q.result) {{
+    inner += '<div class="result-box"></div>';
+    section.innerHTML = inner;
+    renderResult(section.querySelector('.result-box'), q.result);
+    return section;
+  }}
+
+  if (q.qtype === 'fill') {{
+    inner += '<p class="sub">まだ内容が確定していないカードです（採点はありません）</p>';
+    inner += '<blockquote>' + (q.claim_draft || '') + '</blockquote>';
+    inner += '<label>a) この考えを自分の言葉で1文</label><textarea data-field="claim" rows="2"></textarea>';
+    inner += '<label>b) なぜ自分に重要か</label><textarea data-field="why" rows="2"></textarea>';
+    inner += '<label>c) 使う場面の具体的な状況</label><textarea data-field="scene" rows="2"></textarea>';
+    inner += '<button type="button">記入する</button>';
+  }} else {{
+    inner += '<p class="sub">' + QTYPE_LABELS[q.qtype] + 'の問い</p>';
+    inner += '<blockquote>' + q.text + '</blockquote>';
+    inner += '<textarea data-field="text" rows="4" placeholder="回答を入力"></textarea>';
+    inner += '<button type="button">回答する</button>';
+  }}
+  inner += '<div class="result-box"></div>';
+  section.innerHTML = inner;
+
+  const btn = section.querySelector('button');
+  const resultBox = section.querySelector('.result-box');
+  btn.addEventListener('click', () => {{
+    const answers = {{}};
+    section.querySelectorAll('textarea').forEach(t => {{ answers[t.dataset.field] = t.value; }});
+    submitAnswer(q, answers, btn, resultBox);
+  }});
+
+  return section;
+}}
+
+const QTYPE_LABELS = {{ recall: '想起', apply: '適用', contrast: '対比・接続', refute: '反証' }};
+
+(async function init() {{
+  const data = await loadToday();
+  const container = document.getElementById('questions');
+  data.questions.forEach((q, i) => container.appendChild(renderQuestion(q, i)));
+  if (data.questions.every(q => q.result)) {{
+    document.getElementById('done').classList.remove('hidden');
+  }}
+}})();
+</script>
 </body>
 </html>
 """
@@ -131,28 +225,31 @@ def main():
         return
 
     date = today_jst().isoformat()
-
-    # 1. Build the issue body (answer intake; keeps full question text + hidden
-    #    metadata so the grading script can map A1/A2/A3 back to cards).
-    body_parts = [
-        f"読みやすいページはこちら → {PAGES_URL}",
-        "",
-        f"今日（{date}）の想起テストです。回答は **このIssueへの1つのコメント** に、"
-        "`A1.` `A2.` `A3.` のように問いの番号を付けて書いてください（1問だけならA1のみでOK）。",
-        "",
-        "---",
-        "",
-    ]
-    questions_html_parts = []
-    for i, card in enumerate(picked, 1):
+    questions = []
+    for card in picked:
         qtype = "fill" if mode == "fill" else qtype_for(card)
-        body_parts.append(f"## Q{i}\n\n{build_question(card, qtype, cards)}\n")
-        questions_html_parts.append(q_html(i, card, qtype, cards))
-    body = "\n".join(body_parts)
+        questions.append(build_question_entry(card, qtype, cards))
 
+    os.makedirs("docs", exist_ok=True)
+    with open("docs/today.json", "w", encoding="utf-8") as f:
+        json.dump({"date": date, "questions": questions}, f, ensure_ascii=False, indent=2)
+
+    page = PAGE_TEMPLATE.format(
+        date=date,
+        trigger_token_js=json.dumps(TRIGGER_TOKEN),
+        repo_js=json.dumps(REPO),
+        date_js=json.dumps(date),
+    )
+    with open("docs/index.html", "w", encoding="utf-8") as f:
+        f.write(page)
+    print(f"wrote docs/today.json and docs/index.html for {len(questions)} question(s)")
+
+    # Notification-only Issue: fires GitHub's native "new issue" email/push,
+    # then closes immediately. Nobody is expected to comment on it.
     title_line = f"想起テスト {date}"
+    body = f"今日の想起テストはこちら → {PAGES_URL}"
     proc = subprocess.run(
-        ["gh", "issue", "create", "--title", title_line, "--body", body, "--label", "recall"],
+        ["gh", "issue", "create", "--title", title_line, "--body", body],
         capture_output=True, text=True,
     )
     print(proc.stdout)
@@ -160,13 +257,7 @@ def main():
         print(proc.stderr)
         raise SystemExit(proc.returncode)
     issue_url = proc.stdout.strip().splitlines()[-1]
-
-    # 2. Publish the readable page pointing back at this issue for answering.
-    page = build_page(date, "\n".join(questions_html_parts), issue_url)
-    os.makedirs("docs", exist_ok=True)
-    with open("docs/index.html", "w", encoding="utf-8") as f:
-        f.write(page)
-    print("wrote docs/index.html for", issue_url)
+    subprocess.run(["gh", "issue", "close", issue_url], capture_output=True, text=True)
 
 
 if __name__ == "__main__":

@@ -23,11 +23,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Select due cards, open an Issue, and build the Pages site
+      - name: Select due cards, build the interactive Pages site, and fire a notification Issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: scripts
           RECALL_LIMIT: ${{ github.event.inputs.limit || '3' }}
+          PAGES_TRIGGER_TOKEN: ${{ secrets.PAGES_TRIGGER_TOKEN }}
         run: python scripts/select_and_post.py
       - name: Publish docs/ to GitHub Pages
         run: |
