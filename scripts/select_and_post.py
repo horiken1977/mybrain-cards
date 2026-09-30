@@ -71,7 +71,7 @@ def main():
     title_line = f"想起テスト {date}"
     proc = subprocess.run(
         ["gh", "issue", "create", "--title", title_line, "--body", body,
-         "--label", "recall", "--assignee", "@me"],
+         "--label", "recall"],
         capture_output=True, text=True,
     )
     print(proc.stdout)
