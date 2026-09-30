@@ -4,6 +4,8 @@ import html
 import json
 import os
 import subprocess
+
+LIMIT = int(os.environ.get("RECALL_LIMIT", "3"))
 from lib import (
     load_all_cards, select_cards, qtype_for, book_name, title, claim,
     evidence, other_card_for_contrast, QTYPE_LABEL, today_jst,
@@ -123,7 +125,7 @@ def main():
     if not cards:
         print("no cards found")
         return
-    picked, mode = select_cards(cards, limit=3)
+    picked, mode = select_cards(cards, limit=LIMIT)
     if not picked:
         print("nothing due today")
         return

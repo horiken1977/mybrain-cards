@@ -3,7 +3,12 @@ name: Daily recall question
 on:
   schedule:
     - cron: "0 23 * * *"  # 23:00 UTC = 08:00 JST (next day)
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "出題数（小さく始める場合は1）"
+        required: false
+        default: "3"
 
 permissions:
   issues: write
@@ -22,6 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: scripts
+          RECALL_LIMIT: ${{ github.event.inputs.limit || '3' }}
         run: python scripts/select_and_post.py
       - name: Publish docs/ to GitHub Pages
         run: |
