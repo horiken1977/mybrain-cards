@@ -72,6 +72,9 @@ PAGE_TEMPLATE = """<!doctype html>
   .result {{ margin-top: 12px; padding: 12px; border-radius: 8px; background: #eef8f0; }}
   .result.fail {{ background: #fdecea; }}
   .result .score {{ font-weight: 600; margin-bottom: 4px; }}
+  .model-answer {{ margin-top: 10px; padding: 12px; border-radius: 8px; background: #f1f4f9;
+                   border-left: 3px solid #5b7db1; white-space: pre-wrap; }}
+  .model-answer .label {{ font-weight: 600; font-size: 0.85rem; color: #3d5a8a; margin-bottom: 4px; }}
   .error {{ color: #b3261e; font-size: 0.9rem; margin-top: 8px; }}
   .done {{ text-align: center; color: #1a7f37; font-weight: 600; padding: 16px; }}
   .hidden {{ display: none; }}
@@ -111,8 +114,18 @@ function renderResult(container, result) {{
   const div = document.createElement('div');
   div.className = 'result ' + (result.passed ? 'pass' : 'fail');
   div.innerHTML = '<div class="score">' + (result.passed ? '合格' : '不合格') + ' ' + scoreLabel(result.score) + '</div>' +
-                  '<div>' + (result.feedback || '') + '</div>';
+                  '<div>' + escapeHtml(result.feedback || '') + '</div>';
   container.appendChild(div);
+  if (result.model_answer) {{
+    const model = document.createElement('div');
+    model.className = 'model-answer';
+    model.innerHTML = '<div class="label">模範解答例</div><div>' + escapeHtml(result.model_answer) + '</div>';
+    container.appendChild(model);
+  }}
+}}
+
+function escapeHtml(s) {{
+  return String(s).replace(/[&<>"']/g, c => ({{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }})[c]);
 }}
 
 async function submitAnswer(q, answers, btn, resultBox) {{

@@ -142,12 +142,14 @@ def grade_with_claude(title, claim_text, evidence_text, qtype_label, answer):
 問いの型: {qtype_label}
 ユーザーの回答: {answer}
 
-4軸を各0〜2点で採点し、必ず次のJSON形式のみで返してください（説明文やマークダウンは付けない）：
-{{"accuracy": 0-2, "example": 0-2, "conditions": 0-2, "action": 0-2, "feedback": "1〜2文の短いフィードバック（日本語）"}}
+4軸を各0〜2点で採点してください。あわせて、この問いの型に対する模範解答例を1つ書いてください。
+模範解答例は、カードの主張・根拠に沿い、4軸（主張の正確さ／自分の具体例／適用条件と限界／次の行動）をすべて満たす、本人が書いたような一人称の日本語で3〜5文。
+必ず次のJSON形式のみで返してください（説明文やマークダウンは付けない）：
+{{"accuracy": 0-2, "example": 0-2, "conditions": 0-2, "action": 0-2, "feedback": "1〜2文の短いフィードバック（日本語）", "model_answer": "模範解答例（日本語・3〜5文）"}}
 """
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
-        data=json.dumps({"model": MODEL, "max_tokens": 300,
+        data=json.dumps({"model": MODEL, "max_tokens": 800,
                         "messages": [{"role": "user", "content": prompt}]}).encode(),
         method="POST",
     )
@@ -225,6 +227,7 @@ def handle_graded(fm, body, qtype, answers):
         "score": {"accuracy": result["accuracy"], "example": result["example"],
                   "conditions": result["conditions"], "action": result["action"], "total": score},
         "passed": passed, "feedback": result.get("feedback", ""),
+        "model_answer": result.get("model_answer", ""),
         "new_status": new_status, "next_review": next_review,
     }
     return new_text, response
