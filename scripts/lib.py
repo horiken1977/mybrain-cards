@@ -75,31 +75,29 @@ PRIORITY_RANK = {"高": 0, "中": 1, "低": 2}
 
 
 def select_cards(cards, limit=3):
-    """Pick up to `limit` cards for today: unfilled cards first, then due cards
-    sorted by priority / overdue days, interleaving across books."""
-    unfilled = [c for c in cards if is_unfilled(c)]
-    if unfilled:
-        unfilled.sort(key=lambda c: (PRIORITY_RANK.get(c["fm"].get("priority"), 1),))
-        return unfilled[:limit], "fill"
+    """Pick up to `limit` (card, qtype) pairs for today, never two from the same
+    book. Unfilled cards (fill) come first, then due cards sorted by priority /
+    overdue days. If too few books are available, fewer questions are returned
+    rather than repeating a book."""
+    def prio(c):
+        return PRIORITY_RANK.get(c["fm"].get("priority"), 1)
 
-    due = [c for c in cards if is_due(c)]
-    due.sort(key=lambda c: (PRIORITY_RANK.get(c["fm"].get("priority"), 1), -days_overdue(c)))
+    unfilled = sorted([c for c in cards if is_unfilled(c)], key=prio)
+    due = sorted([c for c in cards if not is_unfilled(c) and is_due(c)],
+                 key=lambda c: (prio(c), -days_overdue(c)))
+    candidates = [(c, "fill") for c in unfilled] + [(c, qtype_for(c)) for c in due]
 
     picked = []
     used_books = set()
-    for c in due:
+    for card, qtype in candidates:
         if len(picked) >= limit:
             break
-        book = c["fm"].get("book", "")
-        if book in used_books and len(picked) < len(due):
+        book = book_name(card)
+        if book in used_books:
             continue
-        picked.append(c)
+        picked.append((card, qtype))
         used_books.add(book)
-    if len(picked) < limit:
-        for c in due:
-            if c not in picked and len(picked) < limit:
-                picked.append(c)
-    return picked[:limit], "normal"
+    return picked
 
 
 def qtype_for(card):

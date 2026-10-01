@@ -3,6 +3,7 @@ file in the GitHub repo via the Contents API. Secrets (ANTHROPIC_API_KEY,
 GITHUB_PAT) live only in Vercel environment variables, never in any
 GitHub-tracked file, so GitHub's secret scanning never sees them."""
 import base64
+import html
 import json
 import os
 import re
@@ -66,10 +67,27 @@ def write_frontmatter(fm, body, updates):
     return "\n".join(lines) + "\n" + body
 
 
-def append_history(body, date, qtype_label, score, verdict, note):
+# 回答履歴の1行目（`- 日付 | 型 | 点数 | 合否 | 一言`）。行頭固定なので字下げしたサブ項目は拾わない。
+# 新しい行ほど上にあるので、findall の先頭が最新
+HIST_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2}) \| ([^|\n]+?) \| ([^|\n]*?) \| ([^|\n]*?) \|", re.M)
+
+
+def sanitize(text):
+    """Keep a value on one history line: no pipes (column separator) or newlines."""
+    text = html.unescape(str(text or ""))
+    text = text.replace("|", "｜")
+    return " / ".join(part.strip() for part in text.splitlines() if part.strip())
+
+
+def append_history(body, date, qtype_label, score, verdict, note, details=None):
+    """Insert a history entry at the top of 回答履歴. `details` is a list of
+    (label, text) pairs written as indented sub-items under the entry line."""
     marker = "## 回答履歴\n"
     idx = body.rfind(marker)
-    line = f"\n- {date} | {qtype_label} | {score} | {verdict} | {note}"
+    line = f"\n- {date} | {qtype_label} | {score} | {verdict} | {sanitize(note)}"
+    for label, text in details or []:
+        if sanitize(text):
+            line += f"\n  - {label}: {sanitize(text)}"
     if idx == -1:
         return body.rstrip("\n") + f"\n\n{marker}{line}\n"
     insert_at = idx + len(marker)
@@ -185,7 +203,7 @@ def handle_fill(fm, body, answers):
     return new_text, {"ok": True, "type": "fill"}
 
 
-def handle_graded(fm, body, qtype, answers):
+def handle_graded(fm, body, qtype, answers, question=""):
     answer = (answers.get("text") or "").strip()
     if not answer:
         return None, {"ok": False, "error": "empty_answer"}
@@ -199,11 +217,12 @@ def handle_graded(fm, body, qtype, answers):
     status = fm.get("status", "未履修")
     streak = int(fm.get("streak", "0") or 0)
 
-    hist = re.findall(r"- (\S+) \| (\S+) \| .+", body)
-    same_as_last = bool(hist) and hist[-1][0] == today.isoformat() and hist[-1][1] == QTYPE_LABEL[qtype]
+    # 1日1段階まで：今日すでに合格して昇格していれば、2回目以降の合格では状態を進めない
+    passed_today = any(d == today.isoformat() and v.strip().startswith("合格")
+                       for d, _, _, v in HIST_RE.findall(body))
 
     if passed:
-        if same_as_last:
+        if passed_today:
             new_status, new_streak, next_review = status, streak, fm.get("next_review")
         else:
             new_streak = streak + 1
@@ -216,8 +235,15 @@ def handle_graded(fm, body, qtype, answers):
         next_review = (today + timedelta(days=1)).isoformat()
         verdict = "不合格"
 
+    breakdown = (f"正確さ{result['accuracy']}・具体例{result['example']}・"
+                 f"適用条件{result['conditions']}・次の行動{result['action']}")
     body = append_history(body, today.isoformat(), QTYPE_LABEL[qtype], f"{score}/8", verdict,
-                           result.get("feedback", ""))
+                          result.get("feedback", ""), details=[
+                              ("問い", question),
+                              ("回答", answer),
+                              ("内訳", breakdown),
+                              ("模範解答例", result.get("model_answer", "")),
+                          ])
     new_text = write_frontmatter(fm, body, {
         "status": new_status, "last_reviewed": today.isoformat(),
         "next_review": next_review, "streak": str(new_streak),
@@ -229,6 +255,7 @@ def handle_graded(fm, body, qtype, answers):
         "passed": passed, "feedback": result.get("feedback", ""),
         "model_answer": result.get("model_answer", ""),
         "new_status": new_status, "next_review": next_review,
+        "advanced": passed and not passed_today,
     }
     return new_text, response
 
@@ -260,7 +287,8 @@ class handler(BaseHTTPRequestHandler):
             elif qtype == "fill":
                 new_text, result = handle_fill(card["fm"], card["body"], answers)
             else:
-                new_text, result = handle_graded(card["fm"], card["body"], qtype, answers)
+                new_text, result = handle_graded(card["fm"], card["body"], qtype, answers,
+                                                 payload.get("question", ""))
 
             if new_text is not None:
                 save_card_to_github(card_filename, new_text, card["sha"], date)

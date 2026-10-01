@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 from lib import (
-    load_all_cards, select_cards, qtype_for, book_name, title, claim,
+    load_all_cards, select_cards, book_name, title, claim,
     other_card_for_contrast, today_jst,
 )
 
@@ -142,7 +142,7 @@ async function submitAnswer(q, answers, btn, resultBox) {{
     const resp = await fetch(GRADE_ENDPOINT, {{
       method: 'POST',
       headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{ date: DATE, card: q.card, qtype: q.qtype, answers: answers }}),
+      body: JSON.stringify({{ date: DATE, card: q.card, qtype: q.qtype, question: q.text || '', answers: answers }}),
     }});
     const result = await resp.json();
     renderResult(resultBox, result);
@@ -257,15 +257,14 @@ def main():
     if not cards:
         print("no cards found")
         return
-    picked, mode = select_cards(cards, limit=LIMIT)
+    picked = select_cards(cards, limit=LIMIT)
     if not picked:
         print("nothing due today")
         return
 
     date = today_jst().isoformat()
     questions = []
-    for card in picked:
-        qtype = "fill" if mode == "fill" else qtype_for(card)
+    for card, qtype in picked:
         questions.append(build_question_entry(card, qtype, cards))
 
     os.makedirs("docs", exist_ok=True)
