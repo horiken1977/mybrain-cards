@@ -66,7 +66,7 @@ cards/                        # mybrain直下。独立git repo（public）
     grade.py                   # Vercelサーバーレス関数：POST /api/grade（採点・カード更新）
   design/
     README.md                  # 設計書本体（このファイル）
-    TODO.md                    # 未着手・対応中のタスク一覧
+    TODO.md                    # 2026-10-01 に 99.ActionData/ToDo.md へ統合（案内のみ）
   scripts/
     lib.py                     # カードのfrontmatter読み書き・選定ロジック共通処理
     select_and_post.py         # 出題カード選定・docs/today.json・docs/index.html生成・通知Issue
@@ -417,7 +417,7 @@ fillタイプの場合は `answers` が `{ "claim": "...", "why": "...", "scene"
 
 ## 14. 未実装・TODO
 
-[`TODO.md`](TODO.md) を参照。回答内容の記録の設計案は §15。
+未着手・対応中のタスクは、2026-10-01 に mybrain の外（99.ActionData 直下の `ToDo.md` §5。公開リポジトリには含まれない）へ統合した。完了済みの経緯は本書 §12・§15・§16 に残している。回答内容の記録の設計は §15。
 
 ## 15. 回答内容の記録（2026-10-01 実装）
 
