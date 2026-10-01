@@ -83,6 +83,7 @@ cards/                        # mybrain直下。独立git repo（public）
 - **GitHub Pages**: `main` ブランチの `/docs` から配信（`https://horiken1977.github.io/mybrain-cards/`）
 - **Vercel**: プロジェクト `horikens-projects/mybrain-cards`、本番URL `https://mybrain-cards.vercel.app`。`api/*.py` はVercelが自動でPython関数として検出するため **`vercel.json` は置かない**（`functions.runtime: "python3.12"` 指定は「Function Runtimes must have a valid version」でビルドが失敗したため削除）
 - **デプロイ**：Mac の `cards/` で Vercel CLI（`vercel --prod`）を実行する。GitHub連携による自動デプロイは未確認のため、`api/grade.py` を変更したら手動デプロイが必要
+- **Deployment Protection**：Vercel ダッシュボードの「Vercel Authentication（Require Log In）」を **OFF** にしている（2026-09-30）。ONのままだと、独自ドメインなしでは `mybrain-cards.vercel.app` にも保護がかかり、ブラウザ（Pages）から採点APIを呼べないため
 
 ## 4. データモデル（カード）
 
@@ -368,8 +369,8 @@ fillタイプの場合は `answers` が `{ "claim": "...", "why": "...", "scene"
   1. 同名Issueの取り違え：同日に同じタイトルのIssueが複数でき、close済みの古いIssueに返信してしまう事故が複数回発生
   2. 番号なし回答の誤割当てバグ：複数設問のIssueで番号を付けない回答を質問1への回答と誤解釈し、無関係なカードを上書き
   - v2はフォーム送信時に`card`/`qtype`を一緒に送るため、「どの問いへの回答か」の取り違えが構造的に起こらない
-- **v2a → v2b**：`repository_dispatch` をブラウザから呼ぶにはページにGitHub PATを埋め込む必要があり、public repoではGitHubのsecret scanningが検出してPATを自動失効させる。秘密情報をGitHub外（Vercel環境変数）に置けるサーバーレス関数に切り替えた。応答も同期的になり、ポーリングが不要になった
-- 設計段階ではCloudflare Workersを推奨していたが、実装はVercel（Python）を採用した
+- **v2a → v2b**：`repository_dispatch` をブラウザから呼ぶにはページにGitHub PATを埋め込む必要があり、public repoではGitHubのsecret scanningが検出してPATを自動失効させる（fine-grained/classic を問わず）。秘密情報をGitHub外に置くにはサーバーレス関数が必要になり、ユーザーの判断で **Vercel** を採用した（2026-09-30 15:58 JST の会話で決定）。秘密情報はVercel環境変数に置き、回答の受付→Claude APIで採点→結果をその場でユーザーに返す流れを同期処理で行う。ポーリングも不要になった
+- 設計段階ではCloudflare Workersを推奨していたが、上記の判断でVercel（Python）に変更した
 
 ### 12.3 旧方式の後片付け
 
