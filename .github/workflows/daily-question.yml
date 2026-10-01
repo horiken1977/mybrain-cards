@@ -27,8 +27,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: scripts
-          # MVP期間は1日1問。増やすときは `gh variable set RECALL_LIMIT --body 3`（コード変更不要）
+          # 1日の出題数（現在 RECALL_LIMIT=3）。変更は `gh variable set RECALL_LIMIT --body N`（コード変更不要）
           RECALL_LIMIT: ${{ github.event.inputs.limit || vars.RECALL_LIMIT || '1' }}
+          # 補完（未記入カードの記入）の1日あたり上限。採点ありの問いが足りない日は上限を超えて補完で埋める
+          RECALL_FILL_LIMIT: ${{ vars.RECALL_FILL_LIMIT || '1' }}
         run: python scripts/select_and_post.py
       - name: Publish docs/ to GitHub Pages
         run: |

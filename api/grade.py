@@ -193,6 +193,8 @@ def handle_fill(fm, body, answers):
     body = re.sub(r"（未記入：初回の /recall で自分の言葉で1行書く）", why, body)
     body = re.sub(r"- (.+?)（具体的な状況は初回の /recall で追記）",
                   lambda m: f"- {m.group(1)}：{scene}", body)
+    # 一括作成したカード（使う場面の分類も未記入）
+    body = body.replace("（未記入：使う場面を初回の補完で書く）", scene)
 
     today = today_jst()
     next_review = (today + timedelta(days=1)).isoformat()

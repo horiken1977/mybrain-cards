@@ -72,30 +72,50 @@ def is_due(card):
 
 
 PRIORITY_RANK = {"高": 0, "中": 1, "低": 2}
+# 補完（未記入カードの記入）は1日この数まで。残りは採点ありの問いに回す（リポジトリ変数 RECALL_FILL_LIMIT で変更可）
+MAX_FILL_PER_DAY = int(os.environ.get("RECALL_FILL_LIMIT", "1"))
 
 
 def select_cards(cards, limit=3):
     """Pick up to `limit` (card, qtype) pairs for today, never two from the same
-    book. Unfilled cards (fill) come first, then due cards sorted by priority /
-    overdue days. If too few books are available, fewer questions are returned
-    rather than repeating a book."""
+    book. At most MAX_FILL_PER_DAY unfilled cards (fill) come first, then due
+    cards sorted by priority / overdue days. If there are not enough due cards,
+    the remaining slots go to further fill questions. If too few books are
+    available, fewer questions are returned rather than repeating a book."""
     def prio(c):
         return PRIORITY_RANK.get(c["fm"].get("priority"), 1)
 
-    unfilled = sorted([c for c in cards if is_unfilled(c)], key=prio)
+    # 補完の候補は、自分のメモが付いたハイライトを根拠に持つカードを先に出す
+    unfilled = sorted([c for c in cards if is_unfilled(c)],
+                      key=lambda c: (prio(c), 0 if "自分のメモ" in c["body"] else 1))
     due = sorted([c for c in cards if not is_unfilled(c) and is_due(c)],
                  key=lambda c: (prio(c), -days_overdue(c)))
     candidates = [(c, "fill") for c in unfilled] + [(c, qtype_for(c)) for c in due]
 
     picked = []
     used_books = set()
+    fills = 0
     for card, qtype in candidates:
         if len(picked) >= limit:
             break
         book = book_name(card)
         if book in used_books:
             continue
+        if qtype == "fill":
+            if fills >= MAX_FILL_PER_DAY:
+                continue
+            fills += 1
         picked.append((card, qtype))
+        used_books.add(book)
+
+    # 採点ありの問いが足りない日は、空いた枠を補完の問いで埋める
+    for card in unfilled:
+        if len(picked) >= limit:
+            break
+        book = book_name(card)
+        if book in used_books or any(card is c for c, _ in picked):
+            continue
+        picked.append((card, "fill"))
         used_books.add(book)
     return picked
 
