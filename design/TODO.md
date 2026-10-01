@@ -1,17 +1,26 @@
 # TODO
 
-## 3. v2: サイト内で回答・採点・結果表示を完結させる（対応中・最優先）
-- 設計は [`README.md`](README.md) §12 に確定済み。**実装はまだ**
-- 概要：GitHub Issueへの移動をやめ、Webサイト（index.html）のフォームで回答→サーバーレス関数（Cloudflare Workers推奨）がClaude APIで採点→同じページに結果表示
-- 実装前に決めること：サーバーレス関数のホスティング先アカウント作成、GitHub Fine-grained PAT発行
-- 完了したら v1 のGitHub Issue関連（`daily-question.yml`のissue作成部分、`grade-response.yml`、`recall`ラベル）を削除する
+## 4. 定時出題の稼働確認・後片付け（対応中・最優先）
+- Vercel切替のコミット（`26cd4e5`）で `docs/index.html`・`today.json` が消えており、次の `daily-question.yml` 実行まで Pages は 404。定時実行（cron `0 23 * * *` UTC）が初回動いたかを確認し、動かなければ手動実行（`workflow_dispatch`）で復旧する
+- `vercel.json` の削除と `.gitignore` への `.vercel` 追加がローカル未commit。commit・push する
+- GitHub Actions secret の `ANTHROPIC_API_KEY`（旧方式の名残・未使用）を削除する
+- Vercel の `GITHUB_PAT` がこのrepo限定・Contents権限のみになっているか確認する
+
+## 5. 採点APIの堅牢化（未着手）
+- 同一カードへの同時更新で `sha` 不一致（409）になったとき、1回だけ再取得→再試行する
+- リクエストの必須フィールド・`qtype` の値を検証し、不正なら 400 を返す（今は KeyError 等が 500 になる）
+- 簡易な認証（共有トークン等）の要否を決める（設計書 §11・§13）
+
+## 3. v2: サイト内で回答・採点・結果表示を完結させる（実装済み）
+- 2026-09-30 に Vercel 関数（`api/grade.py`）＋フォーム付き Pages で実装・動作確認済み（`23948d9`）
+- 経緯は [`README.md`](README.md) §12
 
 ## 2. GitHub Pagesで出題を見やすくする（v1・実装済み）
-- 2026-09-30に実装・動作確認済み。v2完成まではこの仕組みで運用する
+- 2026-09-30に実装。v2でフォーム付きページに置き換え済み
 
 ## 1. 正答率ベースの出題優先度（未着手）
 - カードごとに正答率（合格/出題回数）を記録する
 - 出題選定（`select_and_post.py` の `select_cards`）で、正答率が低いカードを優先する
 - 現状の優先度は `priority`（高/中/低）＋期限超過日数のみで、正答率は見ていない
 - `回答履歴` から正答率を集計するロジックが必要（例: 直近N回の合格率、または全期間の合格率）
-- v2（サーバーレス関数）実装後に着手する方が、採点結果の保存先が一本化されて楽になる見込み
+- v2で採点結果の保存先がカードファイルに一本化されたので、着手可能

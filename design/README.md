@@ -2,7 +2,9 @@
 
 読書（Kindleハイライト）を「AIが探せる状態」で終わらせず「自分の頭から取り出せる状態」まで持っていくための、間隔反復＋想起テストの仕組み。mybrain本体（`raw/`・`wiki/`）とは別の独立リポジトリとして運用する。
 
-設計の出発点は mybrain側の `wiki/analysis/kindle-reading-retention-design.md`（Qiita「気合ではなくログで管理する学習法」を参考にした最初の設計）。本書は**現時点での最新設計（Webサイト上で回答・採点・結果表示までを完結させる方式）を正として**記述する。現在実際に動いている実装（GitHub Issueを使う旧方式）との差分・移行状況は §12 にまとめる。
+設計の出発点は mybrain側の `wiki/analysis/kindle-reading-retention-design.md`（Qiita「気合ではなくログで管理する学習法」を参考にした最初の設計）。本書は**現在動いている実装（GitHub Pages＋Vercelサーバーレス関数でWebページ内に回答・採点・結果表示を完結させる方式）を正として**記述する。旧方式からの経緯は §12 にまとめる。
+
+> 最終同期：2026-10-01（コミット `23948d9` 時点の実装に合わせて全面改訂）
 
 ---
 
@@ -15,14 +17,14 @@
 
 ## 2. 全体アーキテクチャ
 
-GitHub Pagesは静的サイトのためそれ単体ではフォーム送信を受け取れない。そこで**サーバーレス関数**を1つ挟み、静的なページ配信はGitHub Pages、回答受付・採点・データ更新はその関数（推奨: Cloudflare Workers、無料枠で十分）が担う。
+GitHub Pagesは静的サイトのためそれ単体ではフォーム送信を受け取れない。そこで**サーバーレス関数**を1つ挟み、静的なページ配信はGitHub Pages、回答受付・採点・データ更新は **Vercel の Python 関数（`api/grade.py`）** が担う。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ 毎朝08:00 JST（GitHub Actions: daily-question.yml）             │
 │  1. 出題カードを選ぶ（lib.select_cards）                        │
-│  2. docs/index.html を生成（フォーム付き）                       │
-│  3. docs/today.json を生成（カードID・問いの型・問い文を格納）     │
+│  2. docs/today.json・docs/index.html を生成                     │
+│  3. 通知専用Issueを作成→即close（GitHubの通知メール/pushを飛ばす） │
 │  4. git push（docs/）→ GitHub Pagesに反映                       │
 └───────────────────────────┬──────────────────────────────────┘
                              │ 通知メール（本文はPagesリンクのみ）
@@ -31,17 +33,18 @@ GitHub Pagesは静的サイトのためそれ単体ではフォーム送信を�
                              │
                              ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ GitHub Pages（docs/index.html）                                │
+│ GitHub Pages（https://horiken1977.github.io/mybrain-cards/）   │
 │  - today.json を読み込み、問いカードごとに回答欄を表示            │
-│  - 送信ボタン押下 → fetch() で下記Workerへ POST                 │
-│  - Workerからのレスポンス（点数・フィードバック）をその場に表示     │
+│  - 送信ボタン押下 → fetch() で下記関数へ POST                   │
+│  - 関数からのレスポンス（点数・フィードバック）をその場に表示      │
 └───────────────────────────┬──────────────────────────────────┘
-                             │ POST /grade { date, card, qtype, answers }
+                             │ POST https://mybrain-cards.vercel.app/api/grade
+                             │      { date, card, qtype, answers }
                              ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ サーバーレス関数（Cloudflare Workers）                          │
+│ Vercel サーバーレス関数（api/grade.py, Python）                  │
 │  1. GitHub Contents APIでカードファイルを取得                    │
-│  2. fillタイプ→記入を反映／それ以外→Claude APIで4軸採点           │
+│  2. fill→記入を反映／それ以外→Claude API（Haiku 4.5）で4軸採点    │
 │  3. GitHub Contents APIでカードファイルを更新（commit）           │
 │  4. 採点結果（点数・フィードバック・新status）をJSONで返す         │
 └──────────────────────────────────────────────────────────────┘
@@ -54,27 +57,30 @@ GitHub Pagesは静的サイトのためそれ単体ではフォーム送信を�
 ## 3. リポジトリ構成
 
 ```
-cards/                        # mybrain本体と同階層。独立git repo（public）
+cards/                        # mybrain直下。独立git repo（public）
   <カードタイトル>.md           # 1アイデア1ファイル（type: card）
   dashboard.base               # Obsidian Basesダッシュボード（今日やる／弱点／状態別／本別）
+  api/
+    grade.py                   # Vercelサーバーレス関数：POST /api/grade（採点・カード更新）
   design/
     README.md                  # 設計書本体（このファイル）
     TODO.md                    # 未着手・対応中のタスク一覧
   scripts/
     lib.py                     # カードのfrontmatter読み書き・選定ロジック共通処理
-    select_and_post.py         # 出題カード選定・docs/today.json・docs/index.html生成
-  worker/                      # サーバーレス関数のソース（未実装）
-    src/index.js               # POST /grade のハンドラ（採点・カード更新）
+    select_and_post.py         # 出題カード選定・docs/today.json・docs/index.html生成・通知Issue
   docs/
-    index.html                 # GitHub Pagesで配信される「今日の想起テスト」ページ（毎日上書き）
-    today.json                 # その日の出題データ（毎日上書き）
+    .nojekyll                  # Jekyll処理を無効化（素の静的ファイルとして配信）
+    index.html                 # 「今日の想起テスト」ページ（daily-question.ymlが毎日生成・上書き）
+    today.json                 # その日の出題データ（同上）
   .github/workflows/
-    daily-question.yml         # 毎日08:00 JST起動、出題データ・ページの生成
+    daily-question.yml         # 毎日08:00 JST起動（cron `0 23 * * *` UTC）＋手動実行（limit指定可）
+  .vercel/                     # Vercel CLIのプロジェクトリンク（.gitignore対象・ローカルのみ）
 ```
 
 - **GitHub repo**: `horiken1977/mybrain-cards`（**public**。GitHub PagesがFreeプランではprivate repoで使えないため2026-09-30にpublic化）
-- **GitHub Pages**: `main` ブランチの `/docs` から配信
-- **Worker**: Cloudflare Workers等にデプロイ（リポジトリとは別のホスティング）
+- **GitHub Pages**: `main` ブランチの `/docs` から配信（`https://horiken1977.github.io/mybrain-cards/`）
+- **Vercel**: プロジェクト `horikens-projects/mybrain-cards`、本番URL `https://mybrain-cards.vercel.app`。`api/*.py` はVercelが自動でPython関数として検出するため **`vercel.json` は置かない**（`functions.runtime: "python3.12"` 指定は「Function Runtimes must have a valid version」でビルドが失敗したため削除）
+- **デプロイ**：Mac の `cards/` で Vercel CLI（`vercel --prod`）を実行する。GitHub連携による自動デプロイは未確認のため、`api/grade.py` を変更したら手動デプロイが必要
 
 ## 4. データモデル（カード）
 
@@ -103,7 +109,7 @@ tags: []
    - `priority`（高→中→低）
    - 期限超過日数が長い順
    - 異なる本が混ざるよう選ぶ（同じ本ばかりにしない）
-3. 上限3枚（`RECALL_LIMIT`で調整可。小さく始める場合は1）
+3. 上限3枚（`RECALL_LIMIT`／手動実行時の `limit` 入力で調整可。小さく始める場合は1）
 
 ### 問いの型（`streak` で決まる）
 
@@ -115,17 +121,18 @@ tags: []
 | 3 | 反証 | 成り立たない場面は何か |
 | 4以上 | ローテーション | 上記を回す |
 
-### 採点（Worker → Claude API）
+### 採点（Vercel関数 → Claude API）
 
-4軸（主張の正確さ／自分の具体例／適用条件と限界／次の行動）を各0〜2点。**合計5点以上かつ主張の正確さ1点以上で合格**。
+モデルは `claude-haiku-4-5-20251001`（`max_tokens: 300`）。4軸（主張の正確さ／自分の具体例／適用条件と限界／次の行動）を各0〜2点、合計8点満点。**合計5点以上かつ主張の正確さ1点以上で合格**。
 
 ### 状態更新
 
 | 結果 | 更新 |
 |---|---|
 | 合格（前回と別の日・別の型） | `streak`+1、状態を1段階進める |
-| 合格（同日・同型の再挑戦） | 状態は進めない |
-| 不合格 | 状態を1段階戻す、`streak`-1（下限0）、`next_review`は翌日 |
+| 合格（同日・同型の再挑戦） | 状態・`streak`・`next_review` は変えない |
+| 不合格 | 状態を1段階戻す（未履修・要復習のときは据え置き）、`streak`-1（下限0）、`next_review`は翌日 |
+| 補完（fill）の記入 | 主張・なぜ重要か・使う場面を書き換え、`status: 要復習`、`next_review`は翌日 |
 
 次回確認日（合格時）：要復習=1日 → 学習中=3日 → 要確認=7日 → 安定=30日（安定で合格継続なら60日）。
 
@@ -140,33 +147,24 @@ tags: []
 │  想起テスト                     │
 │  2026-09-30                    │
 ├───────────────────────────────┤
-│ Q1  会議は場で完結させる          │  ← 問いカード（状態: pending）
+│ Q1. 「会議は場で完結させる」      │  ← 問いカード（状態: pending）
 │    （世界一流エンジニアの思考法）  │
-│                                 │
+│  適用の問い                      │
 │  今週の実際の場面を1つ挙げ、      │
 │  この考えをどう使うか            │
 │  説明してください。               │
 │                                 │
 │  ┌───────────────────────────┐ │
 │  │ (回答入力欄・複数行)          │ │
-│  │                             │ │
 │  └───────────────────────────┘ │
-│                                 │
 │        [ 回答する ]              │
 ├───────────────────────────────┤
-│ Q2  危機感がない病：…             │  ← 別カード。Q1とは独立
-│    （V字回復の経営） 未確定       │
-│                                 │
-│  a) 自分の言葉で1文               │
-│  ┌───────────────────────────┐ │
-│  └───────────────────────────┘ │
+│ Q2. 「危機感がない病：…」         │  ← 別カード。Q1とは独立
+│    （V字回復の経営）              │
+│  まだ内容が確定していないカード    │
+│  a) この考えを自分の言葉で1文     │
 │  b) なぜ自分に重要か              │
-│  ┌───────────────────────────┐ │
-│  └───────────────────────────┘ │
 │  c) 使う場面の具体的な状況         │
-│  ┌───────────────────────────┐ │
-│  └───────────────────────────┘ │
-│                                 │
 │        [ 記入する ]              │
 └───────────────────────────────┘
 ```
@@ -179,64 +177,61 @@ tags: []
 pending（未回答・入力可）
    │ 回答を入力して送信ボタン押下
    ▼
-submitting（送信中・ボタン無効化＋スピナー表示、入力内容は保持）
+submitting（ボタン無効化・「送信中…」表示、入力内容は保持）
    │                         │
-   │ 成功                     │ 失敗（通信エラー／採点API失敗など）
+   │ 成功（ok: true）          │ 失敗（通信エラー／ok: false）
    ▼                         ▼
 result                    error
-（点数・可否・            （エラー文言＋「再送信」ボタン。
- フィードバック表示。       入力していた回答は消さない）
- fillタイプは              │
- 「記入ありがとう           │ 再送信ボタン押下
+（合否・点数・            （エラー文言を表示し、ボタンを
+ フィードバック表示。       「再送信」に戻す。入力は消さない）
+ fillは「記入ありがとう      │
  ございます」のみ）          └──────────▶ submitting へ戻る
 ```
 
-- `result` に達したカードは入力欄を読み取り専用にし、点数と一言フィードバックを表示する（再送信はしない。誤答の再挑戦は翌日以降の通常の出題サイクルに任せる）
-- 全カードが `result` になったら、ページ最上部に「今日の◯問はすべて回答済みです」のような完了メッセージを出す
-- ページを閉じて後から同じURLを開き直した場合、`docs/today.json` 自体は変わらない（同じ日はずっと同じ内容）ため、どのカードが回答済みかをブラウザ側（localStorage）で覚えておく（→ §8）
+- `result` の内容は localStorage に保存し、再読み込み時はフォームの代わりに結果を表示する（再送信はしない。誤答の再挑戦は翌日以降の通常の出題サイクルに任せる）
+- 全カードが回答済みなら、ページ下部に「今日の分はすべて回答済みです。」を出す
 
 ## 7. データの流れ（詳細シーケンス）
 
 ```
 [0] 毎朝08:00 JST（daily-question.yml）
-    出題カードを選定 → docs/today.json・docs/index.html を生成 → git push
-    → GitHub Pagesに反映 → GitHub通知メール（本文冒頭にPagesリンク）が届く
+    出題カードを選定 → docs/today.json・docs/index.html を生成
+    → 通知専用Issue「想起テスト YYYY-MM-DD」を作成して即close（本文はPagesリンク）
+    → docs/ に差分があれば recall-bot 名義で commit・push → GitHub Pagesに反映
 
 [1] ページ読み込み
-    ブラウザ ─ GET docs/today.json ──▶ GitHub Pages（静的ファイル）
-    ブラウザ ← today.jsonの内容 ─────┘
+    ブラウザ ─ GET today.json?_=<timestamp> ──▶ GitHub Pages（静的ファイル）
     ブラウザのJSが localStorage を見て、今日すでに回答済みのcardは
-    result表示（過去に返ってきた点数・フィードバックを再表示）にする
+    result表示（保存済みの点数・フィードバックを再表示）にする
 
 [2] 回答送信（未回答のカードのみ）
-    ブラウザ ─ POST https://<worker>.workers.dev/grade ──▶ Worker
+    ブラウザ ─ POST https://mybrain-cards.vercel.app/api/grade ──▶ Vercel関数
               Body: {date, card, qtype, answers}
-              （fillタイプは answers が {claim, why, scene} の3フィールド、
-               それ以外は answers が {text} の1フィールド）
+              （fillタイプは answers が {claim, why, scene}、それ以外は {text}）
+    CORS：関数は Access-Control-Allow-Origin: https://horiken1977.github.io を返す
 
-[3] Worker内の処理
-    a. リクエストのバリデーション（必須フィールド・日付形式など）
-    b. GitHub Contents API
+[3] 関数内の処理（api/grade.py）
+    a. GitHub Contents API
        GET /repos/horiken1977/mybrain-cards/contents/{card}?ref=main
-       → { content(base64), sha }
-    c. base64をデコードしてfrontmatter/本文をパース（lib.pyと同じ規則をJSに移植）
-    d. qtype=fill の場合：主張／なぜ自分に重要か／使う場面 の該当箇所を
-       answers.claim / answers.why / answers.scene で置き換え
-       qtype!=fill の場合：Anthropic Messages API を呼び、4軸採点＋feedbackを取得
-    e. frontmatter（status/streak/last_reviewed/next_review）と
-       回答履歴 を更新した新しい本文を組み立てる
-    f. GitHub Contents API
+       → { content(base64), sha }（パスは urllib.parse.quote でエンコード）
+    b. frontmatter/本文をパース
+    c. qtype=fill：主張／なぜ自分に重要か／使う場面 を answers で置き換え
+       （3欄のどれかが空なら incomplete_answer で更新しない）
+       qtype!=fill：Anthropic Messages API で4軸採点＋feedbackを取得
+       （回答が空なら empty_answer で更新しない）
+    d. frontmatter（status/streak/last_reviewed/next_review）と回答履歴を更新
+    e. GitHub Contents API
        PUT /repos/horiken1977/mybrain-cards/contents/{card}
-       Body: {message, content(base64・更新後), sha(bと同じ値), branch: "main"}
-       → 新しいコミットとしてカードファイルが更新される
+       Body: {message: "recall(web): update card state for <date>",
+              content(base64), sha, branch: "main",
+              committer: recall-bot <actions@users.noreply.github.com>}
 
 [4] レスポンス
-    Worker ─ JSON ──▶ ブラウザ
-    ブラウザは受け取ったJSONでそのカードのUIを result 状態に更新し、
-    同じ内容を localStorage にも保存する（次回読み込み用）
+    関数 ─ JSON ──▶ ブラウザ
+    ブラウザはそのカードを result 表示にし、ok のときだけ localStorage に保存
 
 [5] Mac側との同期
-    `/card`・`/recall` 実行時に git pull / push し、Workerがcommitした
+    `/card`・`/recall` 実行時に git pull / push し、関数がcommitした
     最新のカード状態をMac側にも反映する
 ```
 
@@ -253,7 +248,7 @@ result                    error
       "qtype": "apply",
       "title": "会議は場で完結させる",
       "book": "世界一流エンジニアの思考法",
-      "text": "今週の実際の場面を1つ挙げ、この考えをどう使うか説明してください。",
+      "text": "今週の実際の場面を1つ挙げ、その場面でこの考えをどう使うか説明してください。",
       "fields": ["text"]
     },
     {
@@ -268,10 +263,11 @@ result                    error
 }
 ```
 
-- `fields` は、その問いカードに何個・どんな入力欄を出すかをJS側に明示するためのフィールド（`text`＝1個の自由記述欄、`["claim","why","scene"]`＝fillタイプの3欄）
+- `title`・`book`・`text`・`claim_draft` は生成時に HTML エスケープ済み
+- `fields` は、その問いカードに何個・どんな入力欄を出すかをJS側に明示するためのフィールド
 - 1日1ファイルで上書き。過去日のログは持たない（履歴が要る場合は各カードの`回答履歴`を見る）
 
-### POSTリクエストのペイロード（ブラウザ→Worker）
+### POSTリクエストのペイロード（ブラウザ→関数）
 
 ```json
 {
@@ -282,25 +278,14 @@ result                    error
 }
 ```
 
-fillタイプの場合：
+fillタイプの場合は `answers` が `{ "claim": "...", "why": "...", "scene": "..." }`。
+
+`date` はコミットメッセージにだけ使う。回答履歴・`last_reviewed` の日付は関数側の JST 当日で決まる。
+
+### レスポンスのペイロード（関数→ブラウザ）
 
 ```json
-{
-  "date": "2026-09-30",
-  "card": "危機感がない病：業績と自分が紐づいていない.md",
-  "qtype": "fill",
-  "answers": {
-    "claim": "危機感は自分の評価や給与に直結して初めて生まれる",
-    "why": "部下のマネジメントで目標設定のヒントになるから",
-    "scene": "評価面談で、業績目標と個人の評価基準の関係を説明するとき"
-  }
-}
-```
-
-### レスポンスのペイロード（Worker→ブラウザ）
-
-```json
-// 採点あり（recall/apply/contrast/refute）
+// 採点あり（recall/apply/contrast/refute）— HTTP 200
 {
   "ok": true,
   "type": "graded",
@@ -311,35 +296,41 @@ fillタイプの場合：
   "next_review": "2026-10-03"
 }
 
-// 記入のみ（fill）
+// 記入のみ（fill）— HTTP 200
 { "ok": true, "type": "fill" }
 
-// 失敗
-{ "ok": false, "error": "grading_failed" }
+// 入力不備 — HTTP 200（カードは更新しない）
+{ "ok": false, "error": "incomplete_answer" }   // または empty_answer / card_not_found
+
+// 例外（GitHub/Anthropic API失敗など）— HTTP 500
+{ "ok": false, "error": "<例外メッセージ>" }
 ```
 
 ### カードファイル本体（GitHubリポジトリ、Contents API経由で更新）
 
-- 保存形式・frontmatterのスキーマは §4 の通り（CLAUDE.md「定着レイヤー」参照）
-- 1回の回答につき1コミット。コミットメッセージ例：`recall(web): update card state for 2026-09-30`、コミッターは専用のBot名義（例: `recall-worker <actions@users.noreply.github.com>`。GitHub Contents APIの`author`/`committer`フィールドで指定）
-- パスに日本語・記号（`：`）を含むため、Contents APIを叩く際は各パスセグメントを`encodeURIComponent`する
-- 同時更新の衝突（同じファイルへの並行PUT）はGitHubが`sha`不一致で409を返すので、Workerは1回だけ再取得→再試行する
+- 保存形式・frontmatterのスキーマは §4 の通り（mybrain の CLAUDE.md「定着レイヤー」参照）
+- 1回の回答につき1コミット（`recall(web): update card state for <date>`、コミッター `recall-bot`）
+- 同時更新の衝突（`sha` 不一致の409）は**未対応**。失敗はHTTP 500としてブラウザに返り、ユーザーが再送信する
 
 ### ブラウザ側の一時状態（localStorage）
 
-- キー例：`recall:2026-09-30:会議は場で完結させる.md`
-- 値：Workerからのレスポンス全体（JSON文字列）
-- 用途：同じ日にページを再読み込みしても「回答済み」の表示を復元するためだけの**キャッシュ**。消えてもカード本体（GitHubリポジトリ側）のデータには影響しない＝正本はあくまでカードファイル
-- 複数デバイス間では同期されない（PCとスマホで同じ日にアクセスすると、片方では「回答済み」表示が出ない）。これは許容する。デバイスをまたいだ同期が必要になったら、Cloudflare KV等の共有ストレージを検討する（現時点では不要と判断）
+- キー：`recall:<date>:<card>`（例：`recall:2026-09-30:会議は場で完結させる.md`）
+- 値：関数からのレスポンス全体（JSON文字列）。`ok: true` のときだけ保存
+- 用途：同じ日にページを再読み込みしても「回答済み」の表示を復元するためだけの**キャッシュ**。消えてもカード本体には影響しない＝正本はあくまでカードファイル
+- 複数デバイス間では同期されない（PCとスマホで同じ日にアクセスすると、片方では「回答済み」表示が出ない）。これは許容する
 
 ## 9. 認証・秘密情報
 
 | 秘密情報 | 置き場所 | 用途 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Workerのsecret | 採点 |
-| GitHub Fine-grained PAT（このrepoのみ、Contents: Read/Write） | Workerのsecret | カードファイルの更新 |
+| `ANTHROPIC_API_KEY` | Vercel環境変数（Production） | 採点 |
+| `GITHUB_PAT` | Vercel環境変数（Production） | Contents APIでカードファイルを読み書き |
+| `GITHUB_TOKEN`（Actions自動発行） | GitHub Actions | 通知Issueの作成・close、docs/ のpush |
 
-**ブラウザ側（index.htmlのJS）には一切の秘密情報を置かない。** 認証が必要な処理はすべてWorker側で行う。
+**ブラウザ側（index.htmlのJS）とGitHubで管理するファイルには一切の秘密情報を置かない。** Vercel環境変数に置くことで、GitHubのsecret scanningがPATを検出して自動失効させる問題（§12.2）も避けている。
+
+- GitHub リポジトリの Actions secret に `ANTHROPIC_API_KEY` が残っているが、旧方式（Actionsで採点）の名残で現在は使っていない（削除候補）
+- `GITHUB_PAT` は「このrepo限定・Contents: Read/Write のみ」のFine-grained PATにする方針。実際の権限範囲は要確認
 
 ## 10. Mac側との同期
 
@@ -353,55 +344,42 @@ fillタイプの場合：
 ## 11. セキュリティ・プライバシー
 
 - **2026-09-29**：`cards/` をmybrain本体（`raw/`の個人情報・キャリア情報等）から切り離した独立repoにする方針を決定（Git自体はセキュリティ上の懸念で一旦見送っていたが、cards専用の小さいリポジトリに限定する形で復活）
-- **2026-09-30**：GitHub PagesがFreeプランではprivate repoに使えないため、`horiken1977/mybrain-cards` を**public**に変更。読書ハイライト（本の引用）と自分の振り返り（「なぜ重要か」「使う場面」）がインターネット上に公開される点は把握した上での判断
-- 採点のため、回答テキストと該当カードの主張・根拠がClaude API（Anthropic）に送信される。コストは`claude-haiku-4-5`使用で月数十〜数百円の想定
+- **2026-09-30**：GitHub PagesがFreeプランではprivate repoに使えないため、`horiken1977/mybrain-cards` を**public**に変更。**カードのみを公開リポジトリに置く方式**として、読書ハイライト（本の引用）と自分の振り返り（「なぜ重要か」「使う場面」「回答履歴」）がインターネット上に公開される点は把握した上での判断
+- 採点のため、回答テキストと該当カードの主張・根拠がClaude API（Anthropic）に送信される。コストは Haiku 4.5 使用で月数十〜数百円の想定
+- 採点APIのURLは公開ページに載っており、CORSはブラウザからの呼び出しを制限するだけなので、URLを知っていれば誰でもPOSTできる（認証なし）。悪用されるとAPI費用とカードの書き換えが起こりうる点は既知のリスク
 - mybrain本体（raw/の生資料・career/finance等）はこのリポジトリに一切含まれない
 
-## 12. 実装状況・移行
+## 12. 実装の経緯
 
-### 12.1 現状（2026-09-30時点）
+### 12.1 変遷（すべて2026-09-30）
 
-本書の設計（Webサイト完結型）は**未実装**。現在実際に動いているのは、開発初期に作った**GitHub Issueベースの旧方式**：
+| 版 | 回答の場所 | 採点の実行場所 | 状態 |
+|---|---|---|---|
+| v1 | GitHub Issueのコメント（`A1.`等の番号付き） | GitHub Actions（`issue_comment`→`grade-response.yml`） | 廃止 |
+| v2a | Pagesのフォーム | GitHub Actions（`repository_dispatch`→`grade-web-response.yml`） | 廃止 |
+| v2b | Pagesのフォーム | Vercel関数（`api/grade.py`） | **現行** |
 
-- 毎朝Issueを作成 → GitHub通知メール（本文にPagesリンクを併記）→ ユーザーはPagesで問題を読んでからIssueに移動 → コメントで`A1.`等の番号付き回答 → `issue_comment`イベントでGitHub Actionsが採点・カード更新・Issueへの返信とclose
+### 12.2 変更理由
 
-### 12.2 旧方式から本設計への変更理由
+- **v1 → v2**：Issueへ移動して回答する2段構えのUXが事故を起こした
+  1. 同名Issueの取り違え：同日に同じタイトルのIssueが複数でき、close済みの古いIssueに返信してしまう事故が複数回発生
+  2. 番号なし回答の誤割当てバグ：複数設問のIssueで番号を付けない回答を質問1への回答と誤解釈し、無関係なカードを上書き
+  - v2はフォーム送信時に`card`/`qtype`を一緒に送るため、「どの問いへの回答か」の取り違えが構造的に起こらない
+- **v2a → v2b**：`repository_dispatch` をブラウザから呼ぶにはページにGitHub PATを埋め込む必要があり、public repoではGitHubのsecret scanningが検出してPATを自動失効させる。秘密情報をGitHub外（Vercel環境変数）に置けるサーバーレス関数に切り替えた。応答も同期的になり、ポーリングが不要になった
+- 設計段階ではCloudflare Workersを推奨していたが、実装はVercel（Python）を採用した
 
-運用テスト（2026-09-30）で、Issueへ移動して回答する2段構えのUXが繰り返し事故を起こした：
+### 12.3 旧方式の後片付け
 
-1. **同名Issueの取り違え**：テスト中に同日複数Issue（同じタイトル）ができ、メール通知のスレッドを間違えて古い（close済みの）Issueに返信してしまう事故が複数回発生
-2. **番号なし回答の誤割当てバグ**：設問が複数あるIssueで`A1.`等の番号を付けない回答を「質問1への回答」と誤解釈し、無関係なカードを上書きする不具合が発生（修正済みだが、構造的な脆さが残る）
+- `grade-response.yml`・`grade_and_update.py`（v1）、`grade-web-response.yml`・`grade_web_response.py`（v2a）は削除済み
+- Issueは「通知専用」として残している（作成→即close。誰もコメントしない）。`recall` ラベルは使っていない
+- 一時的なデバッグ用ワークフロー（`Debug secret length`）は削除済み
 
-本設計（§2〜9）はこの2つを構造的に解消する：Issueへの移動をなくし、フォーム送信時に`card`/`qtype`を明示的に一緒に送ることで「どの問いへの回答か」の取り違えが起こり得ない形にする。
+## 13. 未決定事項
 
-なお、GitHub PagesがFreeプランではprivate repoに使えないという制約（§11参照）は旧方式・本設計どちらにも共通する。
-
-### 12.3 新旧比較
-
-| | 旧方式（現行） | 本設計 |
-|---|---|---|
-| 回答の入力場所 | GitHub Issueのコメント | Webサイト上のフォーム |
-| 採点の呼び出し元 | GitHub Actions（issue_commentイベント） | サーバーレス関数（フォームPOST） |
-| 結果の表示場所 | Issueへの返信コメント | 同じWebページ上 |
-| 「どの問いへの回答か」の紐付け | Issue本文の隠しメタデータ＋`A1.`等の手動採番 | フォーム送信時にcard/qtypeを一緒に送る |
-| GitHub Issue | 使用する | 使用しない |
-| 追加で必要なもの | なし | サーバーレス関数のホスティング先アカウント、GitHub PAT |
-
-### 12.4 移行方針
-
-1. Workerとフォーム付きページ（本設計）を実装し、旧方式と並走できる状態にする
-2. 数日〜1週間、本設計で問題なく回答・採点・表示ができることを確認する
-3. 確認できたら旧方式のIssue関連コード（`daily-question.yml`のIssue作成部分、`grade-response.yml`、`recall`ラベル）を削除する
-
-## 13. 未決定事項（実装着手前に決める）
-
-- サーバーレス関数のホスティング先（Cloudflare Workers を推奨。理由：無料枠が大きい、GitHubとの連携例が多い、独自ドメイン不要で`*.workers.dev`がそのまま使える）
-- GitHub Fine-grained PATの発行（このrepo限定・Contents権限のみに絞る）
 - 過去の回答履歴をページ上でどこまで見せるか（直近だけ／全履歴／`dashboard.base`相当のビューを別途作るか）
+- 通知を今の「Issue作成→即close」のままにするか、別の手段（メール送信等）にするか
+- 採点APIに簡易な認証（共有トークン等）を付けるか（§11の既知リスク）
 
 ## 14. 未実装・TODO
 
-[`TODO.md`](TODO.md) を参照。主な残項目：
-
-- 本設計（Worker・フォームページ）の実装そのもの
-- カードごとの正答率（回答履歴からの合格率）を記録し、正答率の低いカードを優先出題する
+[`TODO.md`](TODO.md) を参照。
