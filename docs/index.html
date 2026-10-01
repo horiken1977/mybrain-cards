@@ -29,6 +29,8 @@
                    border-left: 3px solid #5b7db1; white-space: pre-wrap; }
   .model-answer .label { font-weight: 600; font-size: 0.85rem; color: #3d5a8a; margin-bottom: 4px; }
   .error { color: #b3261e; font-size: 0.9rem; margin-top: 8px; }
+  .test-banner { background: #fff4e5; border: 1px solid #f0c27a; border-radius: 8px;
+                  padding: 10px 12px; font-size: 0.85rem; color: #7a4b00; margin-bottom: 16px; }
   .done { text-align: center; color: #1a7f37; font-weight: 600; padding: 16px; }
   .hidden { display: none; }
 </style>
@@ -36,12 +38,17 @@
 <body>
   <h1>想起テスト</h1>
   <div class="date">2026-10-01</div>
+  <p id="test-banner" class="test-banner hidden">テストモード：何度でも回答できます（回答と採点結果は毎回カードの回答履歴に記録されます）</p>
   <div id="questions"></div>
   <p id="done" class="done hidden">今日の分はすべて回答済みです。</p>
 
 <script>
 const GRADE_ENDPOINT = "https://mybrain-cards.vercel.app/api/grade";
 const DATE = "2026-10-01";
+
+// today.json の "test": true のときはテストモード：回答後も「もう一度回答する」で何度でも回答でき、
+// 回答済みのキャッシュ（localStorage）も完了メッセージも使わない
+let TEST_MODE = false;
 
 function storageKey(card) { return 'recall:' + DATE + ':' + card; }
 
@@ -93,9 +100,15 @@ async function submitAnswer(q, answers, btn, resultBox) {
     const result = await resp.json();
     renderResult(resultBox, result);
     if (result.ok) {
+      btn.closest('section').querySelectorAll('textarea').forEach(t => { t.readOnly = true; });
+      if (TEST_MODE) {
+        btn.disabled = false;
+        btn.textContent = 'もう一度回答する';
+        btn.dataset.again = '1';
+        return;
+      }
       try { localStorage.setItem(storageKey(q.card), JSON.stringify(result)); } catch (e) { /* ignore */ }
       btn.textContent = q.qtype === 'fill' ? '記入済み' : '回答済み';
-      btn.closest('section').querySelectorAll('textarea').forEach(t => { t.readOnly = true; });
       answeredCount += 1;
       updateDone();
     } else {
@@ -117,7 +130,7 @@ function renderQuestion(q, index) {
 
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(storageKey(q.card))); } catch (e) { /* ignore */ }
-  if (cached) {
+  if (cached && !TEST_MODE) {
     inner += '<div class="result-box"></div>';
     section.innerHTML = inner;
     renderResult(section.querySelector('.result-box'), cached);
@@ -142,7 +155,16 @@ function renderQuestion(q, index) {
 
   const btn = section.querySelector('button');
   const resultBox = section.querySelector('.result-box');
+  const submitLabel = btn.textContent;
   btn.addEventListener('click', () => {
+    if (btn.dataset.again) {
+      delete btn.dataset.again;
+      btn.textContent = submitLabel;
+      resultBox.innerHTML = '';
+      section.querySelectorAll('textarea').forEach(t => { t.readOnly = false; t.value = ''; });
+      section.querySelector('textarea').focus();
+      return;
+    }
     const answers = {};
     section.querySelectorAll('textarea').forEach(t => { answers[t.dataset.field] = t.value; });
     submitAnswer(q, answers, btn, resultBox);
@@ -157,6 +179,7 @@ let totalCount = 0;
 let answeredCount = 0;
 
 function updateDone() {
+  if (TEST_MODE) return;
   if (totalCount > 0 && answeredCount >= totalCount) {
     document.getElementById('done').classList.remove('hidden');
   }
@@ -164,6 +187,10 @@ function updateDone() {
 
 (async function init() {
   const data = await loadToday();
+  TEST_MODE = !!data.test;
+  if (TEST_MODE) {
+    document.getElementById('test-banner').classList.remove('hidden');
+  }
   const container = document.getElementById('questions');
   data.questions.forEach((q, i) => container.appendChild(renderQuestion(q, i)));
   totalCount = data.questions.length;

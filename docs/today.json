@@ -1,11 +1,22 @@
 {
   "date": "2026-10-01",
+  "test": true,
   "questions": [
     {
       "card": "会議は場で完結させる.md",
-      "qtype": "recall",
+      "qtype": "apply",
       "title": "会議は場で完結させる",
       "book": "世界一流エンジニアの思考法",
+      "text": "今週の実際の場面を1つ挙げ、その場面でこの考えをどう使うか説明してください。",
+      "fields": [
+        "text"
+      ]
+    },
+    {
+      "card": "人が動かない理由は能力か意欲の2つだけ.md",
+      "qtype": "recall",
+      "title": "人が動かない理由は能力か意欲の2つだけ",
+      "book": "HIGH OUTPUT MANAGEMENT",
       "text": "本を見ずに、この考えを自分の言葉で説明してください。",
       "fields": [
         "text"
