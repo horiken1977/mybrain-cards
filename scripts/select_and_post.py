@@ -128,6 +128,10 @@ async function submitAnswer(q, answers, btn, resultBox) {{
     renderResult(resultBox, result);
     if (result.ok) {{
       try {{ localStorage.setItem(storageKey(q.card), JSON.stringify(result)); }} catch (e) {{ /* ignore */ }}
+      btn.textContent = q.qtype === 'fill' ? '記入済み' : '回答済み';
+      btn.closest('section').querySelectorAll('textarea').forEach(t => {{ t.readOnly = true; }});
+      answeredCount += 1;
+      updateDone();
     }} else {{
       btn.disabled = false;
       btn.textContent = '再送信';
@@ -183,16 +187,24 @@ function renderQuestion(q, index) {{
 
 const QTYPE_LABELS = {{ recall: '想起', apply: '適用', contrast: '対比・接続', refute: '反証' }};
 
+let totalCount = 0;
+let answeredCount = 0;
+
+function updateDone() {{
+  if (totalCount > 0 && answeredCount >= totalCount) {{
+    document.getElementById('done').classList.remove('hidden');
+  }}
+}}
+
 (async function init() {{
   const data = await loadToday();
   const container = document.getElementById('questions');
   data.questions.forEach((q, i) => container.appendChild(renderQuestion(q, i)));
-  const allDone = data.questions.every(q => {{
+  totalCount = data.questions.length;
+  answeredCount = data.questions.filter(q => {{
     try {{ return !!localStorage.getItem(storageKey(q.card)); }} catch (e) {{ return false; }}
-  }});
-  if (allDone) {{
-    document.getElementById('done').classList.remove('hidden');
-  }}
+  }}).length;
+  updateDone();
 }})();
 </script>
 </body>
