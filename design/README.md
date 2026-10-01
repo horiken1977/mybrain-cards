@@ -4,7 +4,9 @@
 
 設計の出発点は mybrain側の `wiki/analysis/kindle-reading-retention-design.md`（Qiita「気合ではなくログで管理する学習法」を参考にした最初の設計）。本書は**現在動いている実装（GitHub Pages＋Vercelサーバーレス関数でWebページ内に回答・採点・結果表示を完結させる方式）を正として**記述する。旧方式からの経緯は §12 にまとめる。
 
-> 最終同期：2026-10-01（コミット `23948d9` 時点の実装に合わせて全面改訂）
+> 最終同期：2026-10-01（コミット `23948d9` 時点の実装に合わせて全面改訂。同日、MVP運用（1日1問）を反映）
+>
+> **現在のフェーズ：MVP（1日1問）でテスト運用中**。詳細は §12.4。
 
 ---
 
@@ -73,7 +75,7 @@ cards/                        # mybrain直下。独立git repo（public）
     index.html                 # 「今日の想起テスト」ページ（daily-question.ymlが毎日生成・上書き）
     today.json                 # その日の出題データ（同上）
   .github/workflows/
-    daily-question.yml         # 毎日08:00 JST起動（cron `0 23 * * *` UTC）＋手動実行（limit指定可）
+    daily-question.yml         # 毎日08:00 JST起動（cron `0 23 * * *` UTC）＋手動実行（limit指定可）。出題数は §5
   .vercel/                     # Vercel CLIのプロジェクトリンク（.gitignore対象・ローカルのみ）
 ```
 
@@ -109,7 +111,8 @@ tags: []
    - `priority`（高→中→低）
    - 期限超過日数が長い順
    - 異なる本が混ざるよう選ぶ（同じ本ばかりにしない）
-3. 上限3枚（`RECALL_LIMIT`／手動実行時の `limit` 入力で調整可。小さく始める場合は1）
+3. 出題数の上限は次の順で決まる：手動実行時の `limit` 入力 → リポジトリ変数 `RECALL_LIMIT` → 既定値 **1**
+   - MVP期間は1日1問（`RECALL_LIMIT` 未設定）。本運用で3問に増やすときは `gh variable set RECALL_LIMIT --body 3 -R horiken1977/mybrain-cards`（コード変更不要）
 
 ### 問いの型（`streak` で決まる）
 
@@ -373,6 +376,20 @@ fillタイプの場合は `answers` が `{ "claim": "...", "why": "...", "scene"
 - `grade-response.yml`・`grade_and_update.py`（v1）、`grade-web-response.yml`・`grade_web_response.py`（v2a）は削除済み
 - Issueは「通知専用」として残している（作成→即close。誰もコメントしない）。`recall` ラベルは使っていない
 - 一時的なデバッグ用ワークフロー（`Debug secret length`）は削除済み
+
+### 12.4 現在の運用フェーズ：MVP（2026-09-30〜）
+
+2026-09-30 に「小さく始めるため、1問だけでテストする」と決め、1日1問のMVPで運用している（2026-10-01 に定時実行の既定値も1問に変更）。
+
+| 確認項目 | 状態（2026-10-01時点） |
+|---|---|
+| 出題（Pages生成・通知メール） | 手動実行では確認済み。定時実行（cron）はまだ一度も動いていない |
+| 補完（fill）の回答→カード更新 | Vercel経由で確認済み（09-30、`23948d9`） |
+| 採点（graded）の回答→採点→カード更新 | **未確認**。09-30のテストで Anthropic API のクレジット残高不足（`credit balance is too low`）により失敗。クレジット追加後に再確認が必要 |
+
+未記入カードが残っている間は fill の問いが優先されるため、採点APIを使わずに回せる。未記入カード（09-30時点で3枚）がなくなると graded の問いになり、クレジットが必要になる。
+
+**3問に増やす目安**：定時実行が数日続けて動くこと、graded の採点〜カード更新が実際に通ること。
 
 ## 13. 未決定事項
 

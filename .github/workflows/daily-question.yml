@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: "出題数（小さく始める場合は1）"
+        description: "出題数（空欄ならリポジトリ変数 RECALL_LIMIT、未設定なら1）"
         required: false
-        default: "3"
+        default: ""
 
 permissions:
   issues: write
@@ -27,7 +27,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONPATH: scripts
-          RECALL_LIMIT: ${{ github.event.inputs.limit || '3' }}
+          # MVP期間は1日1問。増やすときは `gh variable set RECALL_LIMIT --body 3`（コード変更不要）
+          RECALL_LIMIT: ${{ github.event.inputs.limit || vars.RECALL_LIMIT || '1' }}
         run: python scripts/select_and_post.py
       - name: Publish docs/ to GitHub Pages
         run: |

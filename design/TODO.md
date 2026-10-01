@@ -1,8 +1,14 @@
 # TODO
 
-## 4. 定時出題の稼働確認・後片付け（対応中・最優先）
-- Vercel切替のコミット（`26cd4e5`）で `docs/index.html`・`today.json` が消えており、次の `daily-question.yml` 実行まで Pages は 404。定時実行（cron `0 23 * * *` UTC）が初回動いたかを確認し、動かなければ手動実行（`workflow_dispatch`）で復旧する
-- `vercel.json` の削除と `.gitignore` への `.vercel` 追加がローカル未commit。commit・push する
+## 6. MVP（1日1問）の検証 → 3問への移行（対応中・最優先）
+- 2026-10-01 から定時実行の既定値を1問に変更済み（README §5・§12.4）
+- [ ] 定時実行（cron `0 23 * * *` UTC）が実際に毎朝動くことを数日確認する
+- [ ] Anthropic API のクレジットを追加し、graded の問い（想起・適用など）で採点→カード更新が通ることを確認する（09-30はクレジット不足で失敗）
+- [ ] 上の2点を確認できたら `gh variable set RECALL_LIMIT --body 3 -R horiken1977/mybrain-cards` で3問に増やし、README §12.4 を更新する
+
+## 4. 定時出題の稼働確認・後片付け（対応中）
+- [x] Vercel切替のコミット（`26cd4e5`）で消えていた `docs/index.html`・`today.json` を手動実行で再生成（2026-10-01）
+- [x] `vercel.json` の削除と `.gitignore` への `.vercel` 追加を commit・push（`8829c3b`）
 - GitHub Actions secret の `ANTHROPIC_API_KEY`（旧方式の名残・未使用）を削除する
 - Vercel の `GITHUB_PAT` がこのrepo限定・Contents権限のみになっているか確認する
 

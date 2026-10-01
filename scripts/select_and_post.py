@@ -12,7 +12,7 @@ from lib import (
 
 PAGES_URL = "https://horiken1977.github.io/mybrain-cards/"
 GRADE_ENDPOINT = "https://mybrain-cards.vercel.app/api/grade"
-LIMIT = int(os.environ.get("RECALL_LIMIT", "3"))
+LIMIT = int(os.environ.get("RECALL_LIMIT", "1"))
 
 QUESTION_TEXT = {
     "recall": "本を見ずに、この考えを自分の言葉で説明してください。",
