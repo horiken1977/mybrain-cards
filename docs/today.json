@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-01",
+  "questions": [
+    {
+      "card": "心理的安全性：馬鹿だと思われる恐怖が質問を止める.md",
+      "qtype": "fill",
+      "title": "心理的安全性：馬鹿だと思われる恐怖が質問を止める",
+      "book": "HIGH OUTPUT MANAGEMENT",
+      "claim_draft": "「何か言うと馬鹿だと思われはしないか」という恐怖が、知識も地位もある人の必要な質問まで止めてしまう。",
+      "fields": [
+        "claim",
+        "why",
+        "scene"
+      ]
+    }
+  ]
+}
