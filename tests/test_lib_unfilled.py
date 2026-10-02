@@ -1,6 +1,9 @@
 """The question side (scripts/lib.py) and the grading API (api/grade.py) must agree on what
 "unfilled" means (設計書 v4 §3.6.7, §5.2 A9〜A9d). No network; only invented cards, plus a
 read-only pass over the real cards that prints file names only."""
+import json
+import os
+import re
 import unittest
 from datetime import date
 from unittest import mock
@@ -10,9 +13,16 @@ import grade
 import kindle_update
 import lib
 
+FILL_HISTORY_RE = re.compile(r"^- \d{4}-\d{2}-\d{2} \| 補完 \|", re.M)
+
 
 def no_network(*a, **k):
     raise AssertionError("urlopen must not be called in tests")
+
+
+def filled_mark(card):
+    """補完した印：回答履歴に「補完」の行がある（Web の補完）、または status が未履修でない（Mac の /recall）。"""
+    return bool(FILL_HISTORY_RE.search(card["body"])) or card["fm"].get("status", "未履修") != "未履修"
 
 
 class LibUnfilledTest(unittest.TestCase):
@@ -33,11 +43,37 @@ class LibUnfilledTest(unittest.TestCase):
                 self.assertEqual(lib.pending_sections(F.body_of(text)), F.EXPECTED_PENDING[key])
 
     def test_A9b_real_cards_agree(self):
+        """実カードで、①grade と lib の判定が一致し、②独立した期待値（tests/expected_unfilled.json。
+        判定を書き換える前の 04713de の lib.py で作った、ファイル名と真偽値だけの一覧）とも食い違わない。
+
+        期待値はカードの補完・追加で古くなるので、正当な変化では落ちないようにしている：
+        - 期待値にないカード（新しく作ったカード）は②の対象外。期待値にあって今ないカードも対象外
+        - 期待値で未記入（true）→ 今は記入済み、は「補完した印」（回答履歴に「補完」の行がある、または
+          status が未履修でない。Mac の /recall で手で補完したときは履歴が付かず status: 要復習 になる）があれば可
+        - 期待値で記入済み（false）→ 今は未記入、は常に失敗（記入済みのカードが未記入に戻ることはない）
+        新しい状態で固定し直すとき：cd mybrain/cards && python3 tests/update_expected_unfilled.py"""
         cards = lib.load_all_cards(F.CARDS_DIR)
         self.assertGreater(len(cards), 0)
-        mismatched = [c["path"].rsplit("/", 1)[-1] for c in cards
+        mismatched = [os.path.basename(c["path"]) for c in cards
                       if grade.pending_sections(c["body"]) != lib.pending_sections(c["body"])]
         self.assertEqual(mismatched, [], "grade と lib の判定が違うカード（ファイル名だけ）")
+
+        with open(os.path.join(F.HERE, "expected_unfilled.json"), encoding="utf-8") as f:
+            expected = json.load(f)["cards"]
+        compared, wrongly_filled, wrongly_unfilled = 0, [], []
+        for c in cards:
+            name = os.path.basename(c["path"])
+            if name not in expected:
+                continue
+            compared += 1
+            actual = lib.is_unfilled(c)
+            if expected[name] and not actual and not filled_mark(c):
+                wrongly_filled.append(name)
+            elif not expected[name] and actual:
+                wrongly_unfilled.append(name)
+        self.assertGreater(compared, 0, "期待値と照合できたカードがない")
+        self.assertEqual(wrongly_filled, [], "補完した印がないのに記入済みと判定されたカード（ファイル名だけ）")
+        self.assertEqual(wrongly_unfilled, [], "記入済みだったのに未記入と判定されたカード（ファイル名だけ）")
 
     def test_A9c_template_is_unfilled(self):
         h = {"loc": "10", "url": "https://example.com/10", "memo": ""}

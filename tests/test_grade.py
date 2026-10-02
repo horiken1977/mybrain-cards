@@ -284,9 +284,11 @@ class TestRetry(GradeTestBase):
     def test_B1_graded_conflict_then_success(self):
         self.fake.add(CARD, F.A)
 
+        fresh = F.A + "\n割り込みの行"
+
         def interrupt(fake, n):
             if n == 1:
-                fake.add(CARD, fake.text(CARD) + "\n割り込みの行")
+                fake.add(CARD, fresh)
         self.fake.before_put = interrupt
         status, resp = self.graded()
         self.assertEqual(status, 200)
@@ -294,8 +296,17 @@ class TestRetry(GradeTestBase):
         self.assertEqual((len(self.claude_calls), self.fake.gets, self.fake.puts), (1, 2, 2))
         self.assertEqual(self.fake.put_shas, ["sha1", "sha2"])
         text = self.fake.text(CARD)
-        self.assertIn("割り込みの行", text)
-        self.assertIn("- 2026-10-02 | 適用 | 6/8 | 合格 |", text)
+        # 増えた履歴はちょうど1件で、取り直したカードの本文（以前の履歴・割り込みの行）はそのまま残る
+        new_entry = ("\n- 2026-10-02 | 適用 | 6/8 | 合格 | 架空のフィードバック"
+                     "\n  - 問い: 架空の問い"
+                     "\n  - 回答: 架空の回答"
+                     "\n  - 内訳: 正確さ2・具体例2・適用条件1・次の行動1"
+                     "\n  - 模範解答例: 架空の模範解答")
+        self.assertEqual(F.body_of(text),
+                         F.body_of(fresh).replace("## 回答履歴\n", "## 回答履歴\n" + new_entry, 1))
+        entries = re.findall(r"^- \d{4}-\d{2}-\d{2} \|.*$", text, re.M)
+        self.assertEqual(entries, ["- 2026-10-02 | 適用 | 6/8 | 合格 | 架空のフィードバック",
+                                   "- 2026-09-29 | 想起 | 6/8 | 合格 | 前回の一言"])
         self.assertEqual(self.sleeps, [0])
         self.assertEqual(self.log.getvalue(), f"save conflict on {CARD}; retrying once\n")  # 回答本文は出さない
 
@@ -419,6 +430,9 @@ class TestRetry(GradeTestBase):
         self.fake.add(CARD, F.B)
         self.fake.before_put = lambda fake, n: fake.add(CARD, fake.text(CARD))
         self.assertError(self.fill(), 409, "save_conflict")
+        self.assertEqual((self.fake.gets, self.fake.puts, len(self.claude_calls)), (2, 2, 0))
+        self.assertEqual(self.fake.text(CARD), F.B)  # 割り込みは同じ本文を書き直すだけ。今回の補完は保存されない
+        self.assertEqual(self.fake.messages, [])
 
     def test_B7_B8_put_422_is_not_retried(self):
         for msg in ('"sha" wasn\'t supplied', "Invalid request"):
