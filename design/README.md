@@ -73,6 +73,7 @@ cards/                        # mybrain直下。独立git repo（public）
     lib.py                     # カードのfrontmatter読み書き・選定ロジック共通処理
     select_and_post.py         # 出題カード選定・docs/today.json・docs/index.html生成・通知Issue
     kindle_update.py           # Kindle の更新をカードに反映（kindle-highlights の Actions から実行。§17）
+  tests/                       # 採点API・未記入の判定のテスト（標準の unittest。ネットワークに出ない。§8「テスト」）
   docs/
     .nojekyll                  # Jekyll処理を無効化（素の静的ファイルとして配信）
     index.html                 # 「今日の想起テスト」ページ（daily-question.ymlが毎日生成・上書き）
@@ -106,7 +107,17 @@ tags: []
 
 本文の見出し：`## 主張`（自分の言葉で1文）／`## 根拠`（ハイライト原文＋Kindle locationリンク＋自分のメモ＋原本パス）／`## なぜ自分に重要か`（本人が1行）／`## 使う場面`（「〇〇のとき、これを使う」）／`## 回答履歴`（`- 日付 | 型 | 点数 | 合否 | 一言フィードバック`）。
 
-新規カードが未記入（「なぜ自分に重要か」等に `（未記入：…）` が残っている）の間は、出題ロジックが最優先で「補完（fill）」の問いにする。
+新規カードが未記入の間は、出題ロジックが最優先で「補完（fill）」の問いにする。
+
+**未記入の判定**（2026-10-02〜、ToDo B-4。`scripts/lib.py` の `is_unfilled` と `api/grade.py` の `pending_sections` は同じ判定で、`tests/` でずれを防ぐ）：`## 主張`・`## なぜ自分に重要か`・`## 使う場面` の3つの節それぞれに、テンプレートの**目印の行が行まるごと**（前後の空白を除いて完全一致で）残っているか。目印の行は次のとおりで、これ以外の文字列（本人の回答・根拠のメモ・回答履歴に `（未記入` などが書かれていても）には反応しない。
+
+| 節 | 目印の行 |
+|---|---|
+| 主張 | `（AIの下書き。初回の /recall で自分の言葉に直す）` |
+| なぜ自分に重要か | `（未記入：初回の /recall で自分の言葉で1行書く）` |
+| 使う場面 | `- （未記入：使う場面を初回の補完で書く）`、または `/card` の古い形の3行（`- 部下・チーム（具体的な状況は初回の /recall で追記）`・`- 顧客提案・商談（…）`・`- 自分自身（…）`。全履歴で使われた分類はこの3つだけで、もう作られない） |
+
+目印の行を消すことが「記入済み」の合図になる（Mac で手で補完するときも同じ）。根拠・回答履歴は判定に使わない。
 
 ## 5. 出題ロジック（`lib.select_cards`）
 
@@ -140,7 +151,7 @@ tags: []
 | 合格（その日はじめての合格） | `streak`+1、状態を1段階進める |
 | 合格（同じ日に2回目以降の合格） | 状態・`streak`・`next_review` は変えない（**1日1段階まで**。2026-10-01決定。問いの型は問わない） |
 | 不合格 | 状態を1段階戻す（未履修・要復習のときは据え置き）、`streak`-1（下限0）、`next_review`は翌日 |
-| 補完（fill）の記入 | 主張・なぜ重要か・使う場面を書き換え、`status: 要復習`、`next_review`は翌日 |
+| 補完（fill）の記入 | **未記入の節だけ**（§4 の目印の行が残っている節）を書き換え、`status: 要復習`、`next_review`は翌日。記入済みの節は回答があっても書き換えず、応答の `kept` で知らせる。3つとも記入済みなら何も書かずに 409 `already_filled`。`status` が `学習中`・`要確認`・`安定` のカードは frontmatter を変えない（状態を戻さない）。回答は1行にそろえる（改行は ` / `、主張・なぜで行頭の `#` は `\#`）。2026-10-02〜 |
 
 次回確認日（合格時）：要復習=1日 → 学習中=3日 → 要確認=7日 → 安定=30日（安定で合格継続なら60日）。
 
@@ -229,21 +240,27 @@ result                    error
               （fillタイプは answers が {claim, why, scene}、それ以外は {text}）
     CORS：関数は Access-Control-Allow-Origin: https://horiken1977.github.io を返す
 
-[3] 関数内の処理（api/grade.py）
-    a. GitHub Contents API
+[3] 関数内の処理（api/grade.py。2026-10-02 に採点と反映を分けた。ToDo B-4）
+    0. 今日の日付（JST）を最初に1回だけ決める（反映・再試行・date の既定値で同じ日付を使う）
+    a. 入力チェック（GitHub・Claude を呼ぶ前）。だめなら HTTP 400（§8「入力チェック」）
+       回答が空・補完の欄がテンプレートの目印そのもの → 200 empty_answer／incomplete_answer（更新しない）
+    b. GitHub Contents API
        GET /repos/horiken1977/mybrain-cards/contents/{card}?ref=main
        → { content(base64), sha }（パスは urllib.parse.quote でエンコード）
-    b. frontmatter/本文をパース
-    c. qtype=fill：主張／なぜ自分に重要か／使う場面 を answers で置き換え
-       （3欄のどれかが空なら incomplete_answer で更新しない）
-       qtype!=fill：Anthropic Messages API で4軸採点＋feedbackを取得
-       （回答が空なら empty_answer で更新しない）
-    d. frontmatter（status/streak/last_reviewed/next_review）と回答履歴を更新
+       ない・frontmatter が読めない・type: card でない → 404 card_not_found
+    c. qtype!=fill：Anthropic Messages API で4軸採点＋feedbackを取得（1リクエストで1回だけ）
+    d. カードに反映（ネットワークを使わない関数）
+       qtype=fill：未記入の節だけを answers で置き換え（§5「状態更新」。未記入の節がなければ 409 already_filled）
+       qtype!=fill：frontmatter（status/streak/last_reviewed/next_review）と回答履歴を更新
     e. GitHub Contents API
        PUT /repos/horiken1977/mybrain-cards/contents/{card}
        Body: {message: "recall(web): update card state for <date>",
               content(base64), sha, branch: "main",
               committer: recall-bot <actions@users.noreply.github.com>}
+    f. PUT が 409（sha 不一致＝間に別の書き込み）なら1回だけ再試行：1秒待ってカードを取り直し、
+       c の採点結果をそのまま（Claude は呼び直さない）取り直したカードに当て直して PUT。
+       状態・streak・1日1段階・補完の未記入の節は取り直したカードから計算し直す。
+       2回目も 409 なら 409 save_conflict。422・5xx・タイムアウトは再試行しない（500）
 
 [4] レスポンス
     関数 ─ JSON ──▶ ブラウザ
@@ -322,19 +339,59 @@ fillタイプの場合は `answers` が `{ "claim": "...", "why": "...", "scene"
 
 // 記入のみ（fill）— HTTP 200
 { "ok": true, "type": "fill" }
+// 一部記入済みのカードに補完した（未記入の節だけ書いた）— HTTP 200。kept は書かなかった欄（ページは読まない）
+{ "ok": true, "type": "fill", "kept": ["claim"] }
 
-// 入力不備 — HTTP 200（カードは更新しない）
-{ "ok": false, "error": "incomplete_answer" }   // または empty_answer / card_not_found
+// 回答が空・補完の欄がテンプレートの目印の文そのもの — HTTP 200（カードは更新しない）
+{ "ok": false, "error": "incomplete_answer" }   // または empty_answer
 
-// 例外（GitHub/Anthropic API失敗など）— HTTP 500
+// 入力の形が不正 — HTTP 400（GitHub・Claude を呼ばない。コードは下の「入力チェック」）
+{ "ok": false, "error": "invalid_card" }
+
+// カードが GitHub にない・カードとして読めない — HTTP 404
+{ "ok": false, "error": "card_not_found" }
+
+// 補完しようとしたカードに未記入の節がない — HTTP 409（カードは書き換えない）
+{ "ok": false, "error": "already_filled" }
+
+// 再試行しても同時更新で保存できなかった — HTTP 409（採点ありなら unsaved に採点結果。状態は入れない）
+{ "ok": false, "error": "save_conflict",
+  "unsaved": { "type": "graded", "score": {…}, "passed": true, "feedback": "…", "model_answer": "…" } }
+
+// 例外（Claude API の失敗、GitHub の 5xx・422・タイムアウトなど）— HTTP 500
 { "ok": false, "error": "<例外メッセージ>" }
 ```
+
+- すべての応答（200・400・404・409・500）に CORS ヘッダと `Content-Type: application/json` を付ける。ページ（`select_and_post.py` の JS）は HTTP ステータスを見ずに `ok` だけで分岐するので、`ok: false` は「エラー: <error>」と「再送信」になる（2026-10-02 時点でページは変えていない）。ステータスは Vercel のログや `curl` で原因を区別するためのもの
+- 成功時の応答の形と、既存のエラー（`incomplete_answer`・`empty_answer`・`card_not_found`）の文字列は変えていない。`card_not_found` は 2026-10-02 まで実際には返らず 500 になっていた（今は 404）
+
+### 入力チェック（2026-10-02〜、ToDo B-4）
+
+上から順に調べ、最初に引っかかったものを HTTP 400 で返す。
+
+| 項目 | 受け付ける条件 | エラー |
+|---|---|---|
+| `Content-Length` | ASCII の数字だけ（前後の空白は可）、1〜65,536 | `invalid_content_length`（ない・数字でない）／`empty_body`（0）／`body_too_large`（超え。本文は読まない） |
+| 本文 | UTF-8 の JSON のオブジェクト（深すぎる入れ子も 400） | `invalid_json`／`invalid_payload` |
+| `card` | 文字列。`.md` で終わる、`/`・`\`・`..` を含まない、`.` で始まらない、制御文字なし、空白だけでない、255 バイト以下 | `invalid_card` |
+| `qtype` | 文字列で `recall`・`apply`・`contrast`・`refute`・`fill` のどれか | `invalid_qtype` |
+| `answers` | オブジェクト。採点は `text`（4,000 字まで）、補完は `claim`・`why`・`scene`（各 1,000 字まで）。ない・null は空 | `invalid_answers`／`answer_too_long` |
+| `question` | 任意。文字列、2,000 字まで | `invalid_question` |
+| `date` | 任意（ないときは JST の今日）。実在する `YYYY-MM-DD` | `invalid_date` |
+| `test` | 任意。真偽値（値は使わない） | `invalid_test` |
+| 文字列の中身 | 孤立サロゲート（JSON の `\ud800` など）を含まない | `invalid_unicode` |
+
+知らないキーは無視する。空欄（`empty_answer`・`incomplete_answer`）は既存どおり HTTP 200。補完の欄が目印の文と**完全に同じ**（`（未記入：使う場面を初回の補完で書く）`・`部下・チーム（具体的な状況は初回の /recall で追記）` など）ときも、書かれていないものとして `incomplete_answer` にする。目印の文を**含む**だけの回答はそのまま保存する。
+
+### テスト
+
+`cd cards && python3 -m unittest discover -s tests -v`（標準の unittest だけ。`urlopen` を呼んだら落ちる仕掛けで、GitHub と Claude は偽物に差し替える）。`tests/test_grade.py` は入力チェック・衝突と再試行・補完の書き込み・今の挙動の固定、`tests/test_lib_unfilled.py` は出題側と採点APIの未記入の判定が全カードで一致することを確かめる。雛形カードは架空の短い文だけ（公開リポジトリのため）。設計の検討の記録は 99.ActionData の `.claude/orca-runs/run_7b32eaec2d16/design-v4.md`（公開リポジトリの外）。
 
 ### カードファイル本体（GitHubリポジトリ、Contents API経由で更新）
 
 - 保存形式・frontmatterのスキーマは §4 の通り（mybrain の CLAUDE.md「定着レイヤー」参照）
 - 1回の回答につき1コミット（`recall(web): update card state for <date>`、コミッター `recall-bot`）
-- 同時更新の衝突（`sha` 不一致の409）は**未対応**。失敗はHTTP 500としてブラウザに返り、ユーザーが再送信する
+- 同時更新の衝突（`sha` 不一致の409）は、**1回だけ**カードを取り直して同じ採点結果を当て直す（§7 [3] f。2026-10-02〜）。2回目も衝突したら 409 `save_conflict` を返し、ユーザーが再送信する（そのときは採点をやり直す）。PUT のタイムアウト・5xx は、GitHub 側では保存済みのことがあり再試行すると履歴が2行になるので再試行しない
 
 ### ブラウザ側の一時状態（localStorage）
 

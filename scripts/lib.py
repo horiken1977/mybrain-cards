@@ -13,6 +13,18 @@ INTERVAL_DAYS = {"要復習": 1, "学習中": 3, "要確認": 7, "安定": 30}
 QTYPE_BY_STREAK = {0: "recall", 1: "apply", 2: "contrast", 3: "refute"}
 QTYPE_LABEL = {"recall": "想起", "apply": "適用", "contrast": "対比・接続", "refute": "反証", "fill": "補完"}
 
+# 補完の対象の節と、テンプレート（kindle_update.render_card・/card）が書く未記入の目印の行。
+# api/grade.py と同じ判定（Vercel の関数は scripts/ を import しないので2か所に置き、tests でずれを防ぐ）
+FIELD_SECTION = {"claim": "主張", "why": "なぜ自分に重要か", "scene": "使う場面"}
+CLAIM_MARK = "（AIの下書き。初回の /recall で自分の言葉に直す）"
+WHY_MARK = "（未記入：初回の /recall で自分の言葉で1行書く）"
+SCENE_MARK = "（未記入：使う場面を初回の補完で書く）"
+# /card の古い形の使う場面（もう作られない）。全履歴で使われた分類はこの3つだけ
+OLD_SCENE_SUFFIX = "（具体的な状況は初回の /recall で追記）"
+OLD_SCENE_CATEGORIES = ("部下・チーム", "顧客提案・商談", "自分自身")
+OLD_SCENE_LINES = frozenset("- " + c + OLD_SCENE_SUFFIX for c in OLD_SCENE_CATEGORIES)
+HEADING_RE = re.compile(r"^## (.+)$", re.M)
+
 
 def today_jst():
     return datetime.now(JST).date()
@@ -50,8 +62,42 @@ def load_all_cards(cards_dir="."):
     return cards
 
 
+def section_span(body, name):
+    """(start, end) of the first `## <name>` section: from the line after the heading
+    to the next `## ` heading (or the end). None if there is no such heading."""
+    headings = list(HEADING_RE.finditer(body))
+    for i, m in enumerate(headings):
+        if m.group(1) == name:
+            start = min(m.end() + 1, len(body))
+            end = headings[i + 1].start() if i + 1 < len(headings) else len(body)
+            return start, end
+    return None
+
+
+def is_mark_line(field, s):
+    """`s` is one stripped line. True only for the template's own placeholder lines."""
+    if field == "claim":
+        return s == CLAIM_MARK
+    if field == "why":
+        return s == WHY_MARK
+    return s == "- " + SCENE_MARK or s in OLD_SCENE_LINES
+
+
+def pending_sections(body):
+    """The fill fields whose section still has a placeholder line."""
+    result = set()
+    for field, name in FIELD_SECTION.items():
+        span = section_span(body, name)
+        if span is None:
+            continue
+        if any(is_mark_line(field, line.strip()) for line in body[span[0]:span[1]].split("\n")):
+            result.add(field)
+    return result
+
+
 def is_unfilled(card):
-    return "（未記入" in card["body"] or "（AIの下書き" in card["body"]
+    """未記入＝主張・なぜ自分に重要か・使う場面のどれかの節に、テンプレートの目印の行が残っている（採点APIと同じ判定）"""
+    return bool(pending_sections(card["body"]))
 
 
 def days_overdue(card):
