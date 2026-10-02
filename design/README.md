@@ -4,7 +4,7 @@
 
 設計の出発点は mybrain側の `wiki/analysis/kindle-reading-retention-design.md`（Qiita「気合ではなくログで管理する学習法」を参考にした最初の設計）。本書は**現在動いている実装（GitHub Pages＋Vercelサーバーレス関数でWebページ内に回答・採点・結果表示を完結させる方式）を正として**記述する。旧方式からの経緯は §12 にまとめる。
 
-> 最終同期：2026-10-01（コミット `23948d9` 時点の実装に合わせて全面改訂。同日、MVP運用（1日1問）を反映）
+> 最終同期：2026-10-01（コミット `23948d9` 時点の実装に合わせて全面改訂。同日、MVP運用（1日1問）を反映）。2026-10-02 に Kindle の更新をカードへ自動で反映する仕組み（§17）を追加
 >
 > **現在のフェーズ：全書籍（114冊・293枚）で1日3問の運用（2026-10-01）**。全書籍への展開は §16。MVP（1日1問）の経緯と残りの確認事項は §12.4。回答内容の記録は未実装で、設計案を §15 に置く。
 
@@ -56,6 +56,8 @@ GitHub Pagesは静的サイトのためそれ単体ではフォーム送信を�
               git pull / push して同じcardsリポジトリと同期
 ```
 
+出題の前、毎朝 05:17 JST に、非公開リポジトリ `kindle-highlights` の GitHub Actions が Notion から Kindle ハイライトを同期し、続けて `scripts/kindle_update.py` でこのリポジトリのカードを更新する（メモの追従・新しい本のカード作成など。§17）。
+
 ## 3. リポジトリ構成
 
 ```
@@ -70,6 +72,7 @@ cards/                        # mybrain直下。独立git repo（public）
   scripts/
     lib.py                     # カードのfrontmatter読み書き・選定ロジック共通処理
     select_and_post.py         # 出題カード選定・docs/today.json・docs/index.html生成・通知Issue
+    kindle_update.py           # Kindle の更新をカードに反映（kindle-highlights の Actions から実行。§17）
   docs/
     .nojekyll                  # Jekyll処理を無効化（素の静的ファイルとして配信）
     index.html                 # 「今日の想起テスト」ページ（daily-question.ymlが毎日生成・上書き）
@@ -347,6 +350,8 @@ fillタイプの場合は `answers` が `{ "claim": "...", "why": "...", "scene"
 | `ANTHROPIC_API_KEY` | Vercel環境変数（Production） | 採点 |
 | `GITHUB_PAT` | Vercel環境変数（Production） | Contents APIでカードファイルを読み書き |
 | `GITHUB_TOKEN`（Actions自動発行） | GitHub Actions | 通知Issueの作成・close、docs/ のpush |
+| `CARDS_PAT` | 非公開リポジトリ `kindle-highlights` の Actions secret | `kindle_update.py` が更新したカードをこのリポジトリへ push（§17）。このrepo限定・Contents: Read/Write のみの Fine-grained PAT |
+| `ANTHROPIC_API_KEY` | 非公開リポジトリ `kindle-highlights` の Actions secret | 新しいカードの選定・主張の下書き（§17） |
 
 **ブラウザ側（index.htmlのJS）とGitHubで管理するファイルには一切の秘密情報を置かない。** Vercel環境変数に置くことで、GitHubのsecret scanningがPATを検出して自動失効させる問題（§12.2）も避けている。
 
@@ -509,3 +514,38 @@ fillタイプの場合は `answers` が `{ "claim": "...", "why": "...", "scene"
 - 補完は1日1問が基本なので、全カードの記入が終わるまで約9か月かかる。早めたい場合は `gh variable set RECALL_FILL_LIMIT --body 2 -R horiken1977/mybrain-cards`（採点ありの枠が減る）
 - 「使う場面」の空欄は新しい印 `（未記入：使う場面を初回の補完で書く）` を使い、`api/grade.py` の補完処理が置き換える
 - 書名・ファイル名は Unicode NFC に揃える（macOS のファイル名は NFD のことがあり、同じ本が別の本として扱われる原因になる）
+
+## 17. Kindle の更新をカードへ反映（2026-10-02）
+
+Kindle で読んでハイライト・メモを付けると、翌朝カードにも反映される。ToDo B-3 の実装。
+
+### 17.1 流れ
+
+非公開リポジトリ `kindle-highlights`（= mybrain の `raw/kindle`）の `kindle-sync.yml`（毎朝 05:17 JST）が、1つのジョブで次を行う。
+
+1. `.sync/sync.py --defer-email`：Notion → raw/kindle を同期し、今回増えたハイライト・メモを `.sync/changes.json` に書く（commit しない）
+2. raw の更新を commit・push
+3. このリポジトリを `_cards/` に checkout（`CARDS_PAT`）し、`python _cards/scripts/kindle_update.py --kindle .` を実行
+4. 書き換えたカード（`*.md`）だけを commit・push（`kindle: Kindle の更新をカードに反映 <日付>`。衝突したら pull --rebase して1回やり直す）
+5. `.sync/sync.py --send-email`：ハイライトのメールに「🃏 Cards の更新」欄（`.sync/cards_report.json`）を足して1通で送る
+
+raw の全文を扱う処理は非公開側の Actions で行う。このリポジトリは public で、Actions のログも誰でも読めるため、ここには今までどおりカード（約100字の引用＋本人のメモ）しか出さない。`CARDS_PAT` が未登録の間は 3〜4 を飛ばし、同期とメールだけが動く。
+
+### 17.2 何を更新するか
+
+| 種類 | 条件 | 方法 | 書き込み |
+|---|---|---|---|
+| A. メモの追従 | 根拠のハイライトにメモが付いた・変わった | 毎日、全カードを raw と照合（AIなし） | 根拠の `- 自分のメモ（location N）：…` 行を追加・置き換え |
+| B. 引用のずれ | 根拠の引用が、Notion のハイライト本文に見つからない | 同上 | 書き換えない。その日に更新された本のものだけメールで「要確認」 |
+| C. 新しいカード | カードが1枚もない本／カードが3枚未満の本に新しいハイライト・メモが入った | Claude API（`claude-sonnet-5-5`、構造化出力） | 新しいカードファイル |
+| D. 入れ替え候補 | カードが3枚ある本に、メモ付きのハイライトが入った | 機械的に判定 | 作らない。メールで知らせる |
+
+- 照合は (Location, 本文) で行う。Kindle の Location は粗く、同じ Location に別のハイライトがあるため（2026-10-02 に、同期がこれを1件にまとめて本文を捨てていた不具合を直し、9冊・30件を取り戻した）
+- C の規則は一括モード（§16）と同じ：1冊最大3枚、メモ付き優先、既存カードと同じ論点は避ける、引用は逐語で約100字まで。引用が原文に一字一句含まれるか・Location が候補にあるか・タイトルが重複しないかをスクリプトが検証し、通らないカードは捨てる
+- 新しいカードは `status: 未履修`・**`priority: 高`**・主張は「AIの下書き」・「なぜ自分に重要か」「使う場面」は未記入。補完の問いは優先度の高い順に出るので、読んだ直後の本のカードが翌朝から補完に出る
+- 書き換えるのは根拠のメモ行と新しいファイルだけ。主張・なぜ重要か・使う場面・回答履歴・状態は触らず、カードも消さない。入れ替え・削除は本人がメールを見て Mac の `/card` で行う
+- Claude API が失敗しても A・B は反映する（メールに失敗を書く）。スクリプト自体が落ちたら、メールは送ったうえで Actions の実行を失敗にする
+
+### 17.3 手動実行
+
+`kindle-highlights` の Actions から `Kindle highlights sync` を手動実行する。`cards_dry_run` は同期を通常どおり行い、カードは書き換えずに結果だけログ（Summary）に出す（メールなし）。ローカルでは `python scripts/kindle_update.py --kindle ../raw/kindle --dry-run --no-ai` で A・B・D を確かめられる。
