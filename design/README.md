@@ -544,8 +544,10 @@ raw の全文を扱う処理は非公開側の Actions で行う。このリポ�
 - C の規則は一括モード（§16）と同じ：1冊最大3枚、メモ付き優先、既存カードと同じ論点は避ける、引用は逐語で約100字まで。引用が原文に一字一句含まれるか・Location が候補にあるか・タイトルが重複しないかをスクリプトが検証し、通らないカードは捨てる
 - 新しいカードは `status: 未履修`・**`priority: 高`**・主張は「AIの下書き」・「なぜ自分に重要か」「使う場面」は未記入。補完の問いは優先度の高い順に出るので、読んだ直後の本のカードが翌朝から補完に出る
 - 書き換えるのは根拠のメモ行と新しいファイルだけ。主張・なぜ重要か・使う場面・回答履歴・状態は触らず、カードも消さない。入れ替え・削除は本人がメールを見て Mac の `/card` で行う
+- `book:` は AI が付けた短い書名になる（Actions からは wiki を見られないため）。wiki の書籍ページ名と違ったら、Mac で ingest するときに `book:` をページ名にそろえる（2026-10-02 の初回は2冊を手で直した）
+- カードが1枚もない本は、その日に更新されたときだけ AI に問い合わせる（AI が「カードにする価値なし」と判断した本を毎日問い合わせないため）。全部を見直すときは手動実行の `cards_backfill`
 - Claude API が失敗しても A・B は反映する（メールに失敗を書く）。スクリプト自体が落ちたら、メールは送ったうえで Actions の実行を失敗にする
 
 ### 17.3 手動実行
 
-`kindle-highlights` の Actions から `Kindle highlights sync` を手動実行する。`cards_dry_run` は同期を通常どおり行い、カードは書き換えずに結果だけログ（Summary）に出す（メールなし）。ローカルでは `python scripts/kindle_update.py --kindle ../raw/kindle --dry-run --no-ai` で A・B・D を確かめられる。
+`kindle-highlights` の Actions から `Kindle highlights sync` を手動実行する。`cards_dry_run` は同期を通常どおり行い、カードは書き換えずに結果（新しいカードの下書きを含む）だけログに出す（メールなし）。`cards_backfill` はカードが1枚もない本すべてを対象にする。ローカルでは `python scripts/kindle_update.py --kindle ../raw/kindle --dry-run --no-ai` で A・B・D を確かめられる。
