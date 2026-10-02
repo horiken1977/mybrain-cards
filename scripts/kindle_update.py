@@ -18,7 +18,7 @@ public repo: only the card files (a ~100-character quote + the memo) are written
 Only the evidence memo lines and new card files are written. Claims, "why it matters",
 "when to use", answer history and status are never touched; no card is deleted.
 
-Usage: python scripts/kindle_update.py --kindle <kindle-highlights dir> [--dry-run] [--no-ai]
+Usage: python scripts/kindle_update.py --kindle <kindle-highlights dir> [--dry-run] [--no-ai] [--backfill]
 Reads  <kindle>/.sync/changes.json (written by .sync/sync.py)
 Writes <kindle>/.sync/cards_report.json (mailed by `sync.py --send-email`)
 Env:   ANTHROPIC_API_KEY (for C)
@@ -226,7 +226,8 @@ def build_new_cards(client, src, book_title, candidates, slots, book, book_cards
     for c in ans["cards"][:slots]:
         title = safe_title(c["title"])
         quote = one_line(c["quote"]).strip("「」 ")
-        h = next((x for x in candidates if x["loc"] == c["loc"].strip() and quote_in(quote, x["text"])), None)
+        loc = re.sub(r"\D", "", c["loc"])  # the model may answer "Location 104"
+        h = next((x for x in candidates if x["loc"] == loc and quote_in(quote, x["text"])), None)
         if not title or title in used_titles or os.path.exists(os.path.join(CARDS_DIR, title + ".md")):
             print(f"  skip (title taken): {title}")
             continue
@@ -246,6 +247,8 @@ def main():
     ap.add_argument("--kindle", required=True, help="kindle-highlights checkout (raw/kindle)")
     ap.add_argument("--dry-run", action="store_true", help="report only; write no card")
     ap.add_argument("--no-ai", action="store_true", help="skip C (new cards); A/B/D only")
+    ap.add_argument("--backfill", action="store_true",
+                    help="also make cards for every book that has none (normally only books changed today)")
     args = ap.parse_args()
 
     sys.path.insert(0, os.path.join(args.kindle, ".sync"))
@@ -292,8 +295,9 @@ def main():
         have = len(by_book.get(book, [])) if book else 0
         if not hls or have >= MAX_CARDS_PER_BOOK:
             continue
-        if book is None:  # a book with no card at all
-            targets.append((src, None, hls, MAX_CARDS_PER_BOOK))
+        if book is None:  # a book with no card at all (Claude may judge it worth none: ask again only when it changes)
+            if src in changed or args.backfill:
+                targets.append((src, None, hls, MAX_CARDS_PER_BOOK))
         elif src in changed:
             c = changed[src]
             fresh = [h for h in c["new"] + c["memo_updates"] if (src, h["loc"]) not in used]
@@ -334,8 +338,11 @@ def main():
                 if h["memo"] and (src, h["loc"]) not in used:
                     report["swap_candidates"].append({"book": book, "loc": h["loc"], "memo": one_line(h["memo"])})
 
+    new_names = {c["title"] + ".md" for c in report["new_cards"]}
     for fname, text in writes.items():
         print(f"{'(dry-run) ' if args.dry_run else ''}write: {fname}")
+        if args.dry_run and fname in new_names:  # show the drafts for review (private repo log)
+            print("    " + text.split("\n## なぜ自分に重要か")[0].replace("\n", "\n    "))
         if not args.dry_run:
             with open(os.path.join(CARDS_DIR, fname), "w", encoding="utf-8") as f:
                 f.write(text)
