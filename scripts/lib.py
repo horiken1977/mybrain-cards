@@ -118,6 +118,19 @@ def is_due(card):
 
 
 PRIORITY_RANK = {"高": 0, "中": 1, "低": 2}
+# 回答履歴の1行目（日付・型・点数・合否）。新しい行ほど上にあるので、findall の先頭が最新（api/grade.py の HIST_RE と同じ形）
+HIST_RE = re.compile(r"^- (\d{4}-\d{2}-\d{2}) \| ([^|\n]+?) \| ([^|\n]*?) \| ([^|\n]*?) \|", re.M)
+
+
+def last_failed(card):
+    """直近の採点ありの回答が不合格か。補完とテストの回答は飛ばす。
+    不合格のカードを翌日いちばん先に出すために使う（2026-10-04〜、ToDo B-4）"""
+    for _, qtype, _, verdict in HIST_RE.findall(card["body"]):
+        verdict = verdict.strip()
+        if qtype.strip() == "補完" or "テスト" in verdict:
+            continue
+        return verdict == "不合格"
+    return False
 # 補完（未記入カードの記入）は1日この数まで。残りは採点ありの問いに回す（リポジトリ変数 RECALL_FILL_LIMIT で変更可）
 MAX_FILL_PER_DAY = int(os.environ.get("RECALL_FILL_LIMIT", "1"))
 
@@ -125,7 +138,8 @@ MAX_FILL_PER_DAY = int(os.environ.get("RECALL_FILL_LIMIT", "1"))
 def select_cards(cards, limit=3):
     """Pick up to `limit` (card, qtype) pairs for today, never two from the same
     book. At most MAX_FILL_PER_DAY unfilled cards (fill) come first, then due
-    cards sorted by priority / overdue days. If there are not enough due cards,
+    cards: those whose last graded answer failed first, then by priority /
+    overdue days. If there are not enough due cards,
     the remaining slots go to further fill questions. If too few books are
     available, fewer questions are returned rather than repeating a book."""
     def prio(c):
@@ -134,8 +148,9 @@ def select_cards(cards, limit=3):
     # 補完の候補は、自分のメモが付いたハイライトを根拠に持つカードを先に出す
     unfilled = sorted([c for c in cards if is_unfilled(c)],
                       key=lambda c: (prio(c), 0 if "自分のメモ" in c["body"] else 1))
+    # 期限到来の採点の問いは、前回不合格のカードを先に（翌日に確実に出し直す）、続いて priority・超過日数の順
     due = sorted([c for c in cards if not is_unfilled(c) and is_due(c)],
-                 key=lambda c: (prio(c), -days_overdue(c)))
+                 key=lambda c: (0 if last_failed(c) else 1, prio(c), -days_overdue(c)))
     candidates = [(c, "fill") for c in unfilled] + [(c, qtype_for(c)) for c in due]
 
     picked = []
