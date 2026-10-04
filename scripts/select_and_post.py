@@ -21,6 +21,14 @@ QUESTION_TEXT = {
     "refute": "この考えが成り立たない場面を1つ挙げて説明してください。",
 }
 
+# 回答の軸（型ごと。問いの本文・比較対象のあとに付ける）
+ANSWER_AXES = {
+    "recall": "①正確さ ②具体例 ③適用条件 ④次の行動",
+    "apply": "①場面 ②使い方（何をどうするか） ③適用条件 ④次の行動",
+    "contrast": "①対立・補完する点 ②具体例 ③どちらが効く条件 ④次の行動",
+    "refute": "①成り立たない場面 ②理由 ③それでも使える範囲 ④次の行動",
+}
+
 
 def build_question_entry(card, qtype, all_cards):
     entry = {
@@ -40,6 +48,7 @@ def build_question_entry(card, qtype, all_cards):
                 text += f"\n\n比較対象：「{title(other)}」（{book_name(other)}） — {claim(other)}"
             else:
                 text += "\n\n（比較対象がまだないため、代わりに：この考えが役立たない場面も1つ挙げてください）"
+        text += f"\n\n回答の軸：{ANSWER_AXES[qtype]}"
         entry["text"] = html.escape(text)
         entry["fields"] = ["text"]
     return entry
