@@ -1,4 +1,4 @@
-"""Tests for api/grade.py (設計書 v4 §5). Run: cd mybrain/cards && python3 -m unittest discover -s tests -v
+"""Tests for api/grade.py (設計書 v4 §5). Run: cd 90.mybrain/cards && python3 -m unittest discover -s tests -v
 
 No network: urlopen is replaced by a function that fails the test, GitHub by FakeGitHub and
 Claude by a counting fake. Only invented cards are used."""

@@ -2,8 +2,8 @@
 scripts/lib.py at a git revision against the cards at that same revision (file names and
 true/false only; no card text goes into the file, since the repository is public).
 
-    cd mybrain/cards && python3 tests/update_expected_unfilled.py            # HEAD
-    cd mybrain/cards && python3 tests/update_expected_unfilled.py --rev <commit>
+    cd 90.mybrain/cards && python3 tests/update_expected_unfilled.py            # HEAD
+    cd 90.mybrain/cards && python3 tests/update_expected_unfilled.py --rev <commit>
 
 The first version was made with --rev 04713de (the parent of bc939b9, before the unfilled
 check was rewritten), so the test compares the new check with an independent old result.
@@ -52,7 +52,7 @@ def main():
                    "今の判定と比べる。ファイル名と真偽値だけ（本文は入れない）。カードを補完・追加したら古くなるが、"
                    "テストは「期待値にないカードは対象外」「未記入→記入済みは補完した印があれば可」とするので落ちない。"
                    "新しい状態で固定し直すときは更新コマンドを実行し、json の差分を確かめてから commit する"),
-        "_update": "cd mybrain/cards && python3 tests/update_expected_unfilled.py [--rev <commit>]",
+        "_update": "cd 90.mybrain/cards && python3 tests/update_expected_unfilled.py [--rev <commit>]",
         "generated_from": rev,
         "unfilled": sum(cards.values()),
         "filled": len(cards) - sum(cards.values()),

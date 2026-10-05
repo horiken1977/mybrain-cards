@@ -51,7 +51,7 @@ class LibUnfilledTest(unittest.TestCase):
         - 期待値で未記入（true）→ 今は記入済み、は「補完した印」（回答履歴に「補完」の行がある、または
           status が未履修でない。Mac の /recall で手で補完したときは履歴が付かず status: 要復習 になる）があれば可
         - 期待値で記入済み（false）→ 今は未記入、は常に失敗（記入済みのカードが未記入に戻ることはない）
-        新しい状態で固定し直すとき：cd mybrain/cards && python3 tests/update_expected_unfilled.py"""
+        新しい状態で固定し直すとき：cd 90.mybrain/cards && python3 tests/update_expected_unfilled.py"""
         cards = lib.load_all_cards(F.CARDS_DIR)
         self.assertGreater(len(cards), 0)
         mismatched = [os.path.basename(c["path"]) for c in cards
