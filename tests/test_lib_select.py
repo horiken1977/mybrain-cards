@@ -58,5 +58,38 @@ class SelectFailedFirstTest(unittest.TestCase):
         self.assertEqual(self.pick([new, old, high]), ["high.md", "old.md"])
 
 
+LOW_HIST = ("\n- 2026-10-03 | 想起 | 6/8 | 合格 | 架空"
+            "\n- 2026-10-02 | 想起 | 0/8 | 不合格 | 架空"
+            "\n- 2026-10-01 | 想起 | 0/8 | 不合格 | 架空")
+
+
+class SelectPassRateTest(unittest.TestCase):
+    pick = SelectFailedFirstTest.pick
+
+    def test_parse_history_counts_graded_lines_only(self):
+        h = ("\n- 2026-10-05 | 補完 | - | - | 初回記入(web)"
+             "\n- 2026-10-04 | 想起 | 7/8 | 合格(テスト) | 架空" + LOW_HIST)
+        self.assertEqual(lib.parse_history(card("a.md", "本A", history=h)), (3, 1))
+        self.assertEqual(lib.parse_history(card("b.md", "本B")), (0, 0))
+
+    def test_lower_pass_rate_comes_first(self):
+        high = card("high.md", "本H", priority="高", history=PASS_HIST)
+        low = card("low.md", "本L", history=LOW_HIST)
+        mid_hist = PASS_HIST + "\n- 2026-10-01 | 想起 | 0/8 | 不合格 | 架空"
+        mid = card("mid.md", "本M", history=mid_hist)
+        self.assertEqual(self.pick([high, mid, low]), ["low.md", "mid.md"])
+
+    def test_no_history_is_not_pushed_forward(self):
+        high = card("high.md", "本H", priority="高")
+        old = card("old.md", "本O", next_review="2026-09-28")
+        passed = card("p.md", "本P", history=PASS_HIST)
+        self.assertEqual(self.pick([passed, old, high]), ["high.md", "old.md"])
+
+    def test_last_failed_still_beats_pass_rate(self):
+        low = card("low.md", "本L", history=LOW_HIST)  # 最新は合格・正答率 1/3
+        failed = card("failed.md", "本F", history=FAIL_HIST)  # 最新が不合格・正答率 1/2
+        self.assertEqual(self.pick([low, failed]), ["failed.md", "low.md"])
+
+
 if __name__ == "__main__":
     unittest.main()
