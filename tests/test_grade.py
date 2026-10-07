@@ -222,9 +222,17 @@ class TestNormalFlow(GradeTestBase):
                 status, resp = self.fill()
                 self.assertEqual((status, resp), (200, {"ok": True, "type": "fill"}))
                 expected = F.make_card(claim="P", why="Q", scene=scene, history=exp_hist, status="要復習",
-                                       last_reviewed="2026-10-02", next_review="2026-10-03")
+                                       last_reviewed="2026-10-02", next_review="2026-10-03") + "\n"
                 self.assertEqual(self.fake.text(CARD), expected)
                 self.assertEqual(self.claude_calls, [])
+
+    def test_A4c_fill_keeps_trailing_newline(self):
+        for src in (F.B, F.B2):
+            with self.subTest(src=src[-30:]):
+                self.assertTrue(src.endswith("\n"))
+                self.fake.add(CARD, src)
+                self.assertEqual(self.fill(), (200, {"ok": True, "type": "fill"}))
+                self.assertTrue(self.fake.text(CARD).endswith("\n"))
 
     def test_A4b_already_filled_on_first_read(self):
         for key in ("c", "c*", "c†", "c‡", "d†"):
