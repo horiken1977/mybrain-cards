@@ -343,6 +343,8 @@ def apply_fill(fm, body, fill_answers, today):
 
     note = "初回記入(web)" if pending == {"claim", "why", "scene"} else "一部記入(web)"
     new_body = append_history(new_body, today.isoformat(), "補完", "-", "-", note)
+    if body.endswith("\n") and not new_body.endswith("\n"):
+        new_body += "\n"  # 履歴が空の末尾に挿すと改行が消えるので、元のカードの末尾の改行を残す
 
     if fm.get("status") in ("学習中", "要確認", "安定"):
         updates = {}  # 進んだ状態を補完で戻さない
