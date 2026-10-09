@@ -24,6 +24,7 @@ FAIL = {"accuracy": 0, "example": 2, "conditions": 2, "action": 2,
         "feedback": "架空の不合格の一言", "model_answer": "架空の模範解答"}
 FILL_PQR = {"claim": "P", "why": "Q", "scene": "R"}
 DEFAULT_RETRY_WAIT_SEC = grade.RETRY_WAIT_SEC  # 差し替える前の値
+REAL_RESERVE_DAILY_SLOT = grade.reserve_daily_slot  # 上限の試験でだけ本物を使う
 GRADED_KEYS = {"ok", "type", "score", "passed", "feedback", "model_answer", "new_status", "next_review", "advanced"}
 
 
@@ -120,6 +121,7 @@ class GradeTestBase(unittest.TestCase):
             (grade, "gh_request", self.fake),
             (grade, "grade_with_claude", fake_claude),
             (grade, "today_jst", fake_today),
+            (grade, "reserve_daily_slot", lambda today: None),  # 上限は専用の試験で確かめる
             (grade, "RETRY_WAIT_SEC", 0),
             (grade.time, "sleep", self.sleeps.append),
             (grade.sys, "stderr", self.log),
@@ -723,7 +725,7 @@ class TestValidation(GradeTestBase):
                 setup()
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             h = grade.handler.__new__(grade.handler)
-            h.headers = {"Content-Length": str(len(data))}
+            h.headers = {"Content-Length": str(len(data)), "Origin": grade.ALLOWED_ORIGIN}
             h.rfile = io.BytesIO(data)
             h.wfile = io.BytesIO()
             h.request_version = "HTTP/1.1"
@@ -1040,6 +1042,100 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(grade.unsaved_of(resp), {"unsaved": {"type": "graded", "score": {"total": 6},
                                                               "passed": True, "feedback": "f", "model_answer": "m"}})
         self.assertEqual(grade.unsaved_of({"ok": True, "type": "fill"}), {})
+
+
+class TestDailyLimitAndOrigin(GradeTestBase):
+    """(b) の方式（2026-10-09）：送信元の検査と、1日の件数の上限。件数は api_usage.json に今日の分だけ書く。"""
+
+    def usage(self):
+        return json.loads(self.fake.text(grade.USAGE_FILE))
+
+    def setUp(self):
+        super().setUp()
+        self.fake.add(grade.USAGE_FILE, "{}")
+
+    def test_origin_allowed_only_from_the_page(self):
+        self.assertIsNone(grade.origin_error(grade.ALLOWED_ORIGIN))
+        for origin in (None, "", "https://evil.example", "http://horiken1977.github.io",
+                       "https://horiken1977.github.io.evil.example"):
+            with self.subTest(origin=origin):
+                err = grade.origin_error(origin)
+                self.assertEqual((err.status, err.code), (403, "forbidden_origin"))
+
+    def test_do_POST_refuses_other_origin_before_reading_body(self):
+        h = grade.handler.__new__(grade.handler)
+        h.headers = {"Content-Length": "2", "Origin": "https://evil.example"}
+        h.rfile = io.BytesIO(b"{}")
+        h.wfile = io.BytesIO()
+        h.request_version = "HTTP/1.1"
+        h.requestline = "POST /api/grade HTTP/1.1"
+        h.command = "POST"
+        h.client_address = ("127.0.0.1", 0)
+        h.log_request = lambda *a, **k: None
+        h.do_POST()
+        raw = h.wfile.getvalue().decode("utf-8")
+        head, _, body = raw.partition("\r\n\r\n")
+        self.assertEqual(int(head.split()[1]), 403)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "forbidden_origin"})
+        self.assertNoExternal()
+
+    def test_first_request_of_the_day_counts_one(self):
+        REAL_RESERVE_DAILY_SLOT(TODAY)
+        self.assertEqual(self.usage(), {"2026-10-02": 1})
+        self.assertEqual(self.fake.puts, 1)
+
+    def test_counts_up_to_the_limit_then_429_without_writing(self):
+        self.fake.add(grade.USAGE_FILE, json.dumps({"2026-10-02": grade.DAILY_LIMIT - 1}))
+        REAL_RESERVE_DAILY_SLOT(TODAY)
+        self.assertEqual(self.usage(), {"2026-10-02": grade.DAILY_LIMIT})
+        before = self.fake.files[grade.USAGE_FILE]
+        with self.assertRaises(grade.ApiError) as cm:
+            REAL_RESERVE_DAILY_SLOT(TODAY)
+        self.assertEqual((cm.exception.status, cm.exception.code), (429, "daily_limit"))
+        self.assertEqual(cm.exception.extra, {"message": "今日の採点はここまで。明日また"})
+        self.assertEqual(self.fake.files[grade.USAGE_FILE], before)
+
+    def test_over_limit_request_never_reaches_github_card_or_claude(self):
+        self.fake.add(grade.USAGE_FILE, json.dumps({"2026-10-02": grade.DAILY_LIMIT}))
+        with mock.patch.object(grade, "reserve_daily_slot", REAL_RESERVE_DAILY_SLOT):
+            status, obj = self.graded()
+        self.assertEqual(status, 429)
+        self.assertEqual(obj["error"], "daily_limit")
+        self.assertEqual(self.claude_calls, [])
+        self.assertEqual([n for _, n in self.fake.calls if n != grade.USAGE_FILE], [])
+
+    def test_next_day_starts_again(self):
+        self.fake.add(grade.USAGE_FILE, json.dumps({"2026-10-01": grade.DAILY_LIMIT}))
+        REAL_RESERVE_DAILY_SLOT(TODAY)
+        self.assertEqual(self.usage(), {"2026-10-02": 1})
+
+    def test_concurrent_write_loses_with_503_busy(self):
+        self.fake.put_errors = {1: http_error(409)}
+        with self.assertRaises(grade.ApiError) as cm:
+            REAL_RESERVE_DAILY_SLOT(TODAY)
+        self.assertEqual((cm.exception.status, cm.exception.code), (503, "busy"))
+
+    def test_missing_usage_file_is_created_without_sha(self):
+        sent = []
+
+        def gh(method, path, body=None):
+            if method == "GET":
+                raise http_error(404, "Not Found")
+            sent.append(body)
+            return {}
+
+        with mock.patch.object(grade, "gh_request", gh):
+            REAL_RESERVE_DAILY_SLOT(TODAY)
+        self.assertEqual(len(sent), 1)
+        self.assertNotIn("sha", sent[0])
+        self.assertEqual(json.loads(base64.b64decode(sent[0]["content"]).decode("utf-8")), {"2026-10-02": 1})
+
+    def test_invalid_request_is_not_counted(self):
+        status, obj = self.post({"date": "2026-10-02", "card": "../x.md", "qtype": "apply",
+                                 "question": "", "answers": {"text": "架空の回答"}})
+        self.assertEqual(status, 400)
+        self.assertEqual(self.fake.puts, 0)
+        self.assertEqual(self.usage(), {})
 
 
 if __name__ == "__main__":

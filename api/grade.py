@@ -36,6 +36,10 @@ MAX_QUESTION_CHARS = 2000
 MAX_CARD_BYTES = 255
 # 保存が sha 不一致（409）で失敗したとき、取り直す前に待つ秒数（直後の GET が古い sha を返すことがあるため）
 RETRY_WAIT_SEC = 1.0
+# 1日の採点・補完の上限（2026-10-09 の方式 (b)、ToDo B-4）。件数は cards リポジトリの api_usage.json に書く
+DAILY_LIMIT = 30
+USAGE_FILE = "api_usage.json"
+DAILY_LIMIT_MESSAGE = "今日の採点はここまで。明日また"
 
 # 補完の対象の節と、テンプレート（kindle_update.render_card・/card）が書く未記入の目印の行。
 # scripts/lib.py にも同じものを置く（Vercel の関数は api/ だけで動くので import しない。tests でずれを防ぐ）
@@ -560,6 +564,45 @@ def check_blank_answers(req):
     return None
 
 
+def origin_error(origin):
+    """送信元の検査（2026-10-09 の方式 (b)）。ページ（ALLOWED_ORIGIN）以外からの呼び出しを止める。
+    curl などは Origin を偽れるので、防げるのはブラウザで他のサイトから使われることまで。"""
+    if origin != ALLOWED_ORIGIN:
+        return ApiError(403, "forbidden_origin")
+    return None
+
+
+def reserve_daily_slot(today):
+    """今日の採点の件数を1つ増やす（上限は DAILY_LIMIT）。件数は api_usage.json に、今日の分だけ書く。
+    上限に達していたら daily_limit（429）。同時に2件が来て片方が負けたら busy（503）。"""
+    key = today.isoformat()
+    try:
+        data = gh_request("GET", f"contents/{USAGE_FILE}?ref=main")
+        counts = json.loads(base64.b64decode(data["content"]).decode("utf-8"))
+        sha = data["sha"]
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        counts, sha = {}, None
+    n = int(counts.get(key, 0)) if isinstance(counts, dict) else 0
+    if n >= DAILY_LIMIT:
+        raise ApiError(429, "daily_limit", {"message": DAILY_LIMIT_MESSAGE})
+    body = {
+        "message": f"api usage: {key}",
+        "content": base64.b64encode(json.dumps({key: n + 1}).encode("utf-8")).decode("ascii"),
+        "branch": "main",
+        "committer": {"name": "recall-bot", "email": "actions@users.noreply.github.com"},
+    }
+    if sha is not None:
+        body["sha"] = sha
+    try:
+        gh_request("PUT", f"contents/{USAGE_FILE}", body)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            raise ApiError(503, "busy", {"message": "少し待ってからもう一度送ってください"}) from None
+        raise
+
+
 def handle_request(content_length_header, rfile):
     """The whole POST /api/grade: returns (HTTP status, response dict)."""
     try:
@@ -568,6 +611,7 @@ def handle_request(content_length_header, rfile):
         blank = check_blank_answers(req)
         if blank:
             return 200, blank
+        reserve_daily_slot(today)  # 上限は Claude を呼ぶ前に確かめる
         card = load_card(req.card)
         if req.qtype == "fill":
             def apply_fn(c):
@@ -604,6 +648,10 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
+        err = origin_error(self.headers.get("Origin"))
+        if err:
+            self._send_json(err.status, {"ok": False, "error": err.code})
+            return
         try:
             status, obj = handle_request(self.headers.get("Content-Length"), self.rfile)
         except Exception as e:  # noqa: BLE001
