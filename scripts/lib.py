@@ -1,6 +1,7 @@
 """Shared helpers for the cards/ recall automation (GitHub Actions)."""
 import re
 import glob
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -229,9 +230,18 @@ def evidence(card):
     return m.group(1).strip() if m else ""
 
 
-def other_card_for_contrast(card, all_cards):
-    others = [c for c in all_cards if c["path"] != card["path"] and not is_unfilled(c)]
-    return others[0] if others else None
+def other_card_for_contrast(card, all_cards, today=None):
+    """対比の問いの相手。記入済みで別の本のカードから、カードの名前と日付で決まる1枚を選ぶ
+    （同じ日に作り直しても同じ相手、日が変わると別の相手）。候補がなければ None。
+    2026-10-09 まで名前順の先頭の1枚を返していたため、どのカードも同じ1枚と比べていた（ToDo B-4）"""
+    book = book_name(card)
+    others = sorted((c for c in all_cards
+                     if c["path"] != card["path"] and not is_unfilled(c) and book_name(c) != book),
+                    key=lambda c: os.path.basename(c["path"]))
+    if not others:
+        return None
+    key = f"{(today or today_jst()).isoformat()}|{os.path.basename(card['path'])}"
+    return others[int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16) % len(others)]
 
 
 def write_frontmatter(card, updates):
@@ -271,8 +281,9 @@ def regress_status(status):
     return STATUS_ORDER[max(i - 1, 0)]
 
 
-def next_review_after_pass(new_status, streak):
+def next_review_after_pass(new_status, prev_status):
+    """api/grade.py と同じ決まり：安定は、初めて上がったときは30日後、安定のまま合格したら60日後"""
     days = INTERVAL_DAYS.get(new_status, 1)
-    if new_status == "安定" and streak >= 1:
-        days = 60 if streak > 1 else 30
+    if new_status == "安定" and prev_status == "安定":
+        days = 60
     return (today_jst() + timedelta(days=days)).isoformat()

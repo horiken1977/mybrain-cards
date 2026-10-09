@@ -275,7 +275,8 @@ class TestNormalFlow(GradeTestBase):
                     self.assertEqual(req.answer_text, "回答")
 
     def test_A7_interval_to_stable(self):
-        for streak, exp_streak, exp_next in (("2", "3", "2026-12-01"), ("0", "1", "2026-11-01")):
+        # 初めて安定に上がったときは、streak にかかわらず30日後（2026-10-09 まで streak 2 以上は60日後になっていた）
+        for streak, exp_streak, exp_next in (("2", "3", "2026-11-01"), ("3", "4", "2026-11-01"), ("0", "1", "2026-11-01")):
             with self.subTest(streak=streak):
                 self.fake.add(CARD, F.make_card(claim="主張。", why="理由", scene="- 場面", status="要確認", streak=streak))
                 _, resp = self.graded()

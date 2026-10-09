@@ -91,5 +91,49 @@ class SelectPassRateTest(unittest.TestCase):
         self.assertEqual(self.pick([low, failed]), ["failed.md", "low.md"])
 
 
+class StableIntervalTest(unittest.TestCase):
+    """安定の次回確認日：初めて上がったときは30日後、安定のまま合格したら60日後（2026-10-09〜、ToDo B-4）"""
+
+    def test_first_stable_is_30_days_and_staying_stable_is_60(self):
+        with mock.patch.object(lib, "today_jst", lambda: date(2026, 10, 9)):
+            self.assertEqual(lib.next_review_after_pass("安定", "要確認"), "2026-11-08")
+            self.assertEqual(lib.next_review_after_pass("安定", "安定"), "2026-12-08")
+            self.assertEqual(lib.next_review_after_pass("要確認", "学習中"), "2026-10-16")
+
+
+class ContrastPartnerTest(unittest.TestCase):
+    """対比の相手：記入済みで別の本のカードから、カードと日付で決まる1枚（2026-10-09〜、ToDo B-4）"""
+
+    def setUp(self):
+        self.me = card("me.md", "本M")
+        self.same_book = card("same.md", "本M")
+        self.unfilled = F.parse(F.make_card(book="本U"), "unfilled.md")
+        self.others = [card(f"o{i}.md", f"本{i}") for i in range(5)]
+        self.all = [self.me, self.same_book, self.unfilled] + self.others
+
+    def partner(self, day, me=None):
+        return lib.other_card_for_contrast(me or self.me, self.all, today=day)["path"]
+
+    def test_partner_is_filled_and_from_another_book(self):
+        allowed = {c["path"] for c in self.others}
+        for d in range(1, 31):
+            self.assertIn(self.partner(date(2026, 10, d)), allowed)
+
+    def test_same_day_same_partner_and_it_changes_over_days(self):
+        day = date(2026, 10, 9)
+        self.assertEqual(self.partner(day), self.partner(day))
+        partners = {self.partner(date(2026, 10, d)) for d in range(1, 31)}
+        self.assertGreaterEqual(len(partners), 3)
+
+    def test_different_cards_do_not_all_get_the_same_partner(self):
+        day = date(2026, 10, 9)
+        partners = {lib.other_card_for_contrast(c, self.all, today=day)["path"] for c in self.others}
+        self.assertGreater(len(partners), 1)
+
+    def test_none_when_no_filled_card_of_another_book(self):
+        self.assertIsNone(lib.other_card_for_contrast(self.me, [self.me, self.same_book, self.unfilled],
+                                                      today=date(2026, 10, 9)))
+
+
 if __name__ == "__main__":
     unittest.main()

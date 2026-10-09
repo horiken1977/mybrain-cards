@@ -132,10 +132,12 @@ def regress_status(status):
     return STATUS_ORDER[max(i - 1, 0)]
 
 
-def next_review_after_pass(new_status, streak, today):
+def next_review_after_pass(new_status, prev_status, today):
+    """合格したときの次回確認日。安定は、初めて上がったときは30日後、安定のまま合格したら60日後（設計書 §5）。
+    2026-10-09 まで streak で分けていたため、初めて安定になったときも60日後になっていた（ToDo B-4）"""
     days = INTERVAL_DAYS.get(new_status, 1)
-    if new_status == "安定" and streak >= 1:
-        days = 60 if streak > 1 else 30
+    if new_status == "安定" and prev_status == "安定":
+        days = 60
     return (today + timedelta(days=days)).isoformat()
 
 
@@ -383,7 +385,7 @@ def apply_graded(fm, body, qtype, answer, question, result, today):
         else:
             new_streak = streak + 1
             new_status = advance_status(status)
-            next_review = next_review_after_pass(new_status, new_streak, today)
+            next_review = next_review_after_pass(new_status, status, today)
         verdict = "合格"
     else:
         new_status = regress_status(status) if status not in ("未履修", "要復習") else status
