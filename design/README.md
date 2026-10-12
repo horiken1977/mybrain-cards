@@ -56,7 +56,7 @@ GitHub Pagesは静的サイトのためそれ単体ではフォーム送信を�
               git pull / push して同じcardsリポジトリと同期
 ```
 
-出題の前、毎朝 05:17 JST に、非公開リポジトリ `kindle-highlights` の GitHub Actions が Notion から Kindle ハイライトを同期し、続けて `scripts/kindle_update.py` でこのリポジトリのカードを更新する（メモの追従・新しい本のカード作成など。§17）。
+出題の前、毎晩 23:59 JST（2026-10-12 に 05:17 から前の晩に移した。定時は3〜5時間遅れるので、02:00 JST の出題より先に済むように。kindle-highlights の `kindle-sync.yml`）に、非公開リポジトリ `kindle-highlights` の GitHub Actions が Notion から Kindle ハイライトを同期し、続けて `scripts/kindle_update.py` でこのリポジトリのカードを更新する（メモの追従・新しい本のカード作成など。§17）。
 
 ## 3. リポジトリ構成
 
@@ -593,7 +593,7 @@ Kindle で読んでハイライト・メモを付けると、翌朝カードに�
 
 ### 17.1 流れ
 
-非公開リポジトリ `kindle-highlights`（= mybrain の `raw/kindle`）の `kindle-sync.yml`（毎朝 05:17 JST）が、1つのジョブで次を行う。
+非公開リポジトリ `kindle-highlights`（= mybrain の `raw/kindle`）の `kindle-sync.yml`（毎晩 23:59 JST。2026-10-12 まで毎朝 05:17）が、1つのジョブで次を行う。
 
 1. `.sync/sync.py --defer-email`：Notion → raw/kindle を同期し、今回増えたハイライト・メモを `.sync/changes.json` に書く（commit しない）
 2. raw の更新を commit・push
