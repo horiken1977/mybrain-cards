@@ -2,7 +2,7 @@ name: Daily recall question
 
 on:
   schedule:
-    - cron: "17 22 * * *"  # 22:17 UTC = 07:17 JST (next day)。毎時0分は GitHub 側の混雑で数時間遅れるため分をずらしている（2026-10-02 変更。それまでは 08:00 JST）
+    - cron: "0 17 * * *"  # 17:00 UTC = 02:00 JST (next day)。定時は毎日3時間ほど遅れて動く（07:17 の設定で 09:40〜11:19 に動いていた）ため、朝7時ごろに届くよう早めた（2026-10-12 本人の指定。それまでは 07:17 JST、2026-10-02 までは 08:00 JST）
   workflow_dispatch:
     inputs:
       limit:

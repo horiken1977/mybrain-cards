@@ -23,7 +23,7 @@ GitHub Pagesは静的サイトのためそれ単体ではフォーム送信を�
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 毎朝07:17 JST（GitHub Actions: daily-question.yml）             │
+│ 毎朝02:00 JST（GitHub Actions: daily-question.yml）             │
 │  1. 出題カードを選ぶ（lib.select_cards）                        │
 │  2. docs/today.json・docs/index.html を生成                     │
 │  3. 通知専用Issueを作成→即close（GitHubの通知メール/pushを飛ばす） │
@@ -79,7 +79,7 @@ cards/                        # mybrain直下。独立git repo（public）
     index.html                 # 「今日の想起テスト」ページ（daily-question.ymlが毎日生成・上書き）
     today.json                 # その日の出題データ（同上）
   .github/workflows/
-    daily-question.yml         # 毎日07:17 JST起動（cron `17 22 * * *` UTC。毎時0分は混雑で遅れるため分をずらす。2026-10-02 まで 08:00）＋手動実行（limit指定可）。出題数は §5
+    daily-question.yml         # 毎日02:00 JST起動（cron `0 17 * * *` UTC。定時は毎日3時間ほど遅れる〔07:17 の設定で、10-01〜10-12 の定時12回は 09:40〜11:19 JST に動いた。`gh run list --workflow daily-question.yml`〕ので、朝7時ごろに届くよう早めた。2026-10-12 本人の指定。それまでは 07:17、2026-10-02 まで 08:00）＋手動実行（limit指定可）。出題数は §5
   .vercel/                     # Vercel CLIのプロジェクトリンク（.gitignore対象・ローカルのみ）
 ```
 
@@ -235,7 +235,7 @@ result                    error
 ## 7. データの流れ（詳細シーケンス）
 
 ```
-[0] 毎朝07:17 JST（daily-question.yml）
+[0] 毎朝02:00 JST（daily-question.yml。実際は3時間ほど遅れて動く）
     出題カードを選定 → docs/today.json・docs/index.html を生成
     → 通知専用Issue「想起テスト YYYY-MM-DD」を作成して即close（本文はPagesリンク）
     → docs/ に差分があれば recall-bot 名義で commit・push → GitHub Pagesに反映
