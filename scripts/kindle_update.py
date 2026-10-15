@@ -15,7 +15,12 @@ public repo: only the card files (a ~100-character quote + the memo) are written
   D. swap      : a book that already has 3 cards got a new highlight with a memo ->
                  only reported.
 
-Only the evidence memo lines and new card files are written. Claims, "why it matters",
+E. recent    : every night (even with no new highlight) the card books whose raw file's
+                 `last_highlighted` is within 365 / 183 days of today are written to
+                 recent_books.json at the top of this repo (names only, no highlight dates).
+                 The daily question reads it when RECALL_RECENT_WINDOW is set.
+
+Only the evidence memo lines, new card files and recent_books.json are written. Claims, "why it matters",
 "when to use", answer history and status are never touched; no card is deleted.
 
 Usage: python scripts/kindle_update.py --kindle <kindle-highlights dir> [--dry-run] [--no-ai] [--backfill]
@@ -29,6 +34,7 @@ import os
 import re
 import sys
 import unicodedata
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lib  # noqa: E402
@@ -36,6 +42,9 @@ import lib  # noqa: E402
 CARDS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL = "claude-sonnet-5-5"
 MAX_CARDS_PER_BOOK = 3
+RECENT_WINDOWS = (365, 183)
+RECENT_BOOKS_PATH = os.path.join(CARDS_DIR, "recent_books.json")
+LH_RE = re.compile(r"^last_highlighted:\s*(\d{4}-\d{2}-\d{2})\s*$")
 MAX_QUOTE_CHARS = 120  # 「約100字まで」に少し余裕を持たせた上限
 MEMO_RE = re.compile(r"^- 自分のメモ（location (\d+)）：(.*)$", re.M)
 SRC_RE = re.compile(r"原本：`raw/kindle/(.+?)`")
@@ -241,6 +250,41 @@ def build_new_cards(client, src, book_title, candidates, slots, book, book_cards
     return out
 
 
+# ------------------------------------------------------- E: recent books
+def read_last_highlighted(path):
+    """frontmatter の last_highlighted -> date（なければ None）。本文は見ない。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            if f.readline().strip() != "---":
+                return None
+            for line in f:
+                if line.strip() == "---":
+                    return None
+                m = LH_RE.match(line)
+                if m:
+                    return date.fromisoformat(m.group(1))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def recent_books(kindle_dir, infos, today):
+    """{"365": [本の名前], "183": [...]}。窓は今日から w 日以内（今日を含み、未来の日付は除く）。
+    本の名前はカードの `book:`（lib.book_name）。原本が窓内にあるカードの本だけを入れ、ハイライトの日付は書かない。"""
+    lh = {}
+    for name in os.listdir(kindle_dir):
+        if name.endswith(".md") and not name.startswith("."):
+            lh[nfc(name)] = read_last_highlighted(os.path.join(kindle_dir, name))
+    out = {}
+    for w in RECENT_WINDOWS:
+        names = set()
+        for info in infos:
+            if info["book"] and any(lh.get(s) and 0 <= (today - lh[s]).days <= w for s in info["src"]):
+                names.add(info["book"])
+        out[str(w)] = sorted(names)
+    return out
+
+
 # --------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
@@ -346,6 +390,14 @@ def main():
         if not args.dry_run:
             with open(os.path.join(CARDS_DIR, fname), "w", encoding="utf-8") as f:
                 f.write(text)
+    # E: recent_books.json（新しいハイライトがない晩も書く。--dry-run では書かない）
+    recent = {"updated": today, "windows": recent_books(args.kindle, infos, date.fromisoformat(today))}
+    print(f"{'(dry-run) ' if args.dry_run else ''}recent_books: " +
+          ", ".join(f"{w}日 {len(b)}冊" for w, b in recent["windows"].items()))
+    if not args.dry_run:
+        with open(RECENT_BOOKS_PATH, "w", encoding="utf-8") as f:
+            json.dump(recent, f, ensure_ascii=False, indent=1)
+            f.write("\n")
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
     print(json.dumps({k: (len(v) if isinstance(v, list) else v) for k, v in report.items()}, ensure_ascii=False))

@@ -2,7 +2,9 @@
 import re
 import glob
 import hashlib
+import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9))
@@ -156,6 +158,40 @@ def pass_rate(card):
 MAX_FILL_PER_DAY = int(os.environ.get("RECALL_FILL_LIMIT", "1"))
 
 
+# 直近の本を先に出す（案 B。リポジトリ変数 RECALL_RECENT_WINDOW が 365 か 183 のときだけ。未設定・ほかの値は今の並び）。
+# 本の一覧は Kindle の更新が毎晩書く recent_books.json（{"updated": "YYYY-MM-DD", "windows": {"365": [本の名前], "183": [...]}}）。
+# 一覧が無い・読めない・作った日が RECENT_MAX_AGE_DAYS 日より前のときは使わず、今の並びのままにする
+RECENT_WINDOWS = ("365", "183")
+RECENT_MAX_AGE_DAYS = 3
+RECENT_BOOKS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "recent_books.json")
+
+
+def recent_books(today=None):
+    """直近の本の名前の集合を返す。使わないとき（変数なし・一覧なし・壊れ・古い）は None（理由をログに1行出す）。"""
+    window = os.environ.get("RECALL_RECENT_WINDOW", "").strip()
+    if not window:
+        return None
+    if window not in RECENT_WINDOWS:
+        print(f"recent: RECALL_RECENT_WINDOW={window!r} は 365・183 以外なので今の並びのまま", file=sys.stderr)
+        return None
+    try:
+        with open(RECENT_BOOKS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        updated = datetime.strptime(data["updated"], "%Y-%m-%d").date()
+        books = data["windows"][window]
+        if not isinstance(books, list) or not all(isinstance(b, str) for b in books):
+            raise ValueError("windows の中身が本の名前の一覧ではない")
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"recent: 一覧 recent_books.json を使えないので今の並びのまま（{type(e).__name__}: {e}）", file=sys.stderr)
+        return None
+    age = ((today or today_jst()) - updated).days
+    if age > RECENT_MAX_AGE_DAYS:
+        print(f"recent: 一覧の作った日 {updated} が古い（{age}日前）ので今の並びのまま", file=sys.stderr)
+        return None
+    print(f"recent: 窓 {window}日の直近の本 {len(books)}冊を先に並べる（一覧 {updated}）", file=sys.stderr)
+    return set(books)
+
+
 def select_cards(cards, limit=3):
     """Pick up to `limit` (card, qtype) pairs for today, never two from the same
     book. At most MAX_FILL_PER_DAY unfilled cards (fill) come first, then due
@@ -166,12 +202,18 @@ def select_cards(cards, limit=3):
     def prio(c):
         return PRIORITY_RANK.get(c["fm"].get("priority"), 1)
 
+    recent = recent_books()
+
+    def rec(c):
+        # 直近の本のカードを先に（recent が None なら全部 0 で並びは変わらない）
+        return 0 if recent is None or book_name(c) in recent else 1
+
     # 補完の候補は、自分のメモが付いたハイライトを根拠に持つカードを先に出す
     unfilled = sorted([c for c in cards if is_unfilled(c)],
-                      key=lambda c: (prio(c), 0 if "自分のメモ" in c["body"] else 1))
+                      key=lambda c: (rec(c), prio(c), 0 if "自分のメモ" in c["body"] else 1))
     # 期限到来の採点の問いは、前回不合格のカードを先に（翌日に確実に出し直す）、続いて正答率の低い順、priority・超過日数の順
     due = sorted([c for c in cards if not is_unfilled(c) and is_due(c)],
-                 key=lambda c: (0 if last_failed(c) else 1, pass_rate(c), prio(c), -days_overdue(c)))
+                 key=lambda c: (rec(c), 0 if last_failed(c) else 1, pass_rate(c), prio(c), -days_overdue(c)))
     candidates = [(c, "fill") for c in unfilled] + [(c, qtype_for(c)) for c in due]
 
     picked = []

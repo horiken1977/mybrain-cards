@@ -31,6 +31,8 @@ jobs:
           RECALL_LIMIT: ${{ github.event.inputs.limit || vars.RECALL_LIMIT || '1' }}
           # 補完（未記入カードの記入）の1日あたり上限。採点ありの問いが足りない日は上限を超えて補完で埋める
           RECALL_FILL_LIMIT: ${{ vars.RECALL_FILL_LIMIT || '1' }}
+          # 直近の本を先に出す窓（日数。365 か 183。未設定なら空で今の並び）。変更は `gh variable set RECALL_RECENT_WINDOW --body 365`、戻すのは変数を消す
+          RECALL_RECENT_WINDOW: ${{ vars.RECALL_RECENT_WINDOW || '' }}
         run: python scripts/select_and_post.py
       - name: Publish docs/ to GitHub Pages
         run: |
