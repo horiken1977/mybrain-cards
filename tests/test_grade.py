@@ -1155,7 +1155,9 @@ class TestGradePrompt(unittest.TestCase):
         self.assertIn("比較対象：「別のカード」（別の本） — 主張B。", p)
         self.assertIn("- accuracy: 対立・補完する点", p)
         self.assertIn("- conditions: どちらが効く条件", p)
-        self.assertIn("対立する点と補完する点をそれぞれ書いて", p)
+        for lead in ("「対立する点は、…」", "「補完する点は、…」", "「例えば、…」", "「次は、…」"):
+            self.assertIn(lead, p)
+        self.assertIn("4〜6文", p)
         self.assertNotIn("主張の正確さ", p)
 
     def test_question_is_unescaped(self):
@@ -1166,7 +1168,8 @@ class TestGradePrompt(unittest.TestCase):
         self.assertIn("- accuracy: 主張の正確さ", self.prompt("recall"))
         self.assertIn("- accuracy: 成り立たない場面", self.prompt("refute"))
         for qtype in ("recall", "apply", "refute"):
-            self.assertNotIn("対立する点と補完する点", self.prompt(qtype))
+            self.assertNotIn("「対立する点は、…」", self.prompt(qtype))
+            self.assertIn("3〜5文", self.prompt(qtype))
 
     def test_no_question_line_when_empty(self):
         self.assertNotIn("出題文:", self.prompt("recall", ""))
