@@ -108,8 +108,8 @@ class GradeTestBase(unittest.TestCase):
         self.today_calls = 0
         self.today_seq = [TODAY]
 
-        def fake_claude(title, claim, evidence, qtype_label, answer):
-            self.claude_calls.append((title, claim, evidence, qtype_label, answer))
+        def fake_claude(prompt):
+            self.claude_calls.append(prompt)
             return dict(self.grade_result)
 
         def fake_today():
@@ -182,13 +182,17 @@ class TestNormalFlow(GradeTestBase):
                       "\n- 2026-10-02 | 適用 | 6/8 | 合格 | 架空のフィードバック"
                       "\n  - 問い: 架空の問い"
                       "\n  - 回答: 架空の回答"
-                      "\n  - 内訳: 正確さ2・具体例2・適用条件1・次の行動1"
+                      "\n  - 内訳: 場面2・使い方2・適用条件1・次の行動1"
                       "\n  - 模範解答例: 架空の模範解答"
                       "\n- 2026-09-29 | 想起 | 6/8 | 合格 | 前回の一言", text)
         self.assertEqual((self.fake.gets, self.fake.puts, len(self.claude_calls)), (1, 1, 1))
         self.assertEqual(self.fake.put_shas, ["sha1"])
         evidence = "> 架空の引用文。\n\n[Kindle location 10](https://example.com/10)"  # get_evidence は「原本」の前まで
-        self.assertEqual(self.claude_calls[0], ("架空のカード", "架空の主張。", evidence, "適用", "架空の回答"))
+        prompt = self.claude_calls[0]
+        for part in ("カード「架空のカード」", "主張: 架空の主張。", "根拠: " + evidence, "問いの型: 適用",
+                     "出題文: 架空の問い", "ユーザーの回答: 架空の回答", "- accuracy: 当てはめる場面"):
+            self.assertIn(part, prompt)
+        self.assertNotIn("主張の正確さ", prompt)
 
     def test_A2_fail(self):
         self.fake.add(CARD, F.A)
@@ -311,7 +315,7 @@ class TestRetry(GradeTestBase):
         new_entry = ("\n- 2026-10-02 | 適用 | 6/8 | 合格 | 架空のフィードバック"
                      "\n  - 問い: 架空の問い"
                      "\n  - 回答: 架空の回答"
-                     "\n  - 内訳: 正確さ2・具体例2・適用条件1・次の行動1"
+                     "\n  - 内訳: 場面2・使い方2・適用条件1・次の行動1"
                      "\n  - 模範解答例: 架空の模範解答")
         self.assertEqual(F.body_of(text),
                          F.body_of(fresh).replace("## 回答履歴\n", "## 回答履歴\n" + new_entry, 1))
@@ -1137,6 +1141,42 @@ class TestDailyLimitAndOrigin(GradeTestBase):
         self.assertEqual(status, 400)
         self.assertEqual(self.fake.puts, 0)
         self.assertEqual(self.usage(), {})
+
+
+class TestGradePrompt(unittest.TestCase):
+    """採点の指示文は問いの型ごとの4軸を使う（2026-10-22〜、ToDo B-3）"""
+
+    def prompt(self, qtype, question="問い"):
+        return grade.build_grade_prompt("カード", "主張A。", "> 引用", qtype, question, "回答")
+
+    def test_contrast_uses_contrast_axes_and_other_claim(self):
+        q = "この考えと、下の別の考え方がどこで対立・補完するかを説明してください。\n\n比較対象：「別のカード」（別の本） — 主張B。"
+        p = self.prompt("contrast", q)
+        self.assertIn("比較対象：「別のカード」（別の本） — 主張B。", p)
+        self.assertIn("- accuracy: 対立・補完する点", p)
+        self.assertIn("- conditions: どちらが効く条件", p)
+        self.assertIn("対立する点と補完する点をそれぞれ書いて", p)
+        self.assertNotIn("主張の正確さ", p)
+
+    def test_question_is_unescaped(self):
+        p = self.prompt("contrast", "比較対象：「X」 &amp; &quot;Y&quot;")
+        self.assertIn('比較対象：「X」 & "Y"', p)
+
+    def test_each_type_has_its_axes(self):
+        self.assertIn("- accuracy: 主張の正確さ", self.prompt("recall"))
+        self.assertIn("- accuracy: 成り立たない場面", self.prompt("refute"))
+        for qtype in ("recall", "apply", "refute"):
+            self.assertNotIn("対立する点と補完する点", self.prompt(qtype))
+
+    def test_no_question_line_when_empty(self):
+        self.assertNotIn("出題文:", self.prompt("recall", ""))
+
+    def test_contrast_history_breakdown(self):
+        result = {"accuracy": 2, "example": 1, "conditions": 1, "action": 0, "feedback": "f", "model_answer": "m"}
+        body = "## 主張\n\n主張A。\n"
+        _, resp = grade.apply_graded({"status": "未履修", "streak": "0"}, body, "contrast", "回答", "問い",
+                                     result, date(2026, 10, 22))
+        self.assertEqual(resp["score"]["total"], 4)
 
 
 if __name__ == "__main__":

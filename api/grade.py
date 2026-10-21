@@ -213,22 +213,57 @@ def save_card(filename, new_text, sha, date):
         raise
 
 
-def grade_with_claude(title, claim_text, evidence_text, qtype_label, answer):
-    prompt = f"""あなたは学習コーチです。以下のカードの主張と、ユーザーの回答を4軸で採点してください。
+# 採点の4軸の意味は問いの型ごと（出題の「回答の軸」と同じ並び。scripts/select_and_post.py の ANSWER_AXES）。
+# JSON の鍵（accuracy・example・conditions・action）と合格の条件は全型共通（2026-10-22〜、ToDo B-3）
+GRADE_AXES = {
+    "recall": ("主張の正確さ", "自分の具体例", "適用条件と限界", "次の行動"),
+    "apply": ("当てはめる場面", "使い方（何をどうするか）", "適用条件と限界", "次の行動"),
+    "contrast": ("対立・補完する点（2つの主張を取り違えずに、どこで対立し、どこで補い合うか）",
+                 "具体例", "どちらが効く条件", "次の行動"),
+    "refute": ("成り立たない場面", "その理由", "それでも使える範囲", "次の行動"),
+}
+# 回答履歴の「内訳」に書く短い名前（ページの scoreLabel と同じ）
+SCORE_LABELS = {
+    "recall": ("正確さ", "具体例", "適用条件", "次の行動"),
+    "apply": ("場面", "使い方", "適用条件", "次の行動"),
+    "contrast": ("対立・補完", "具体例", "効く条件", "次の行動"),
+    "refute": ("成り立たない場面", "理由", "使える範囲", "次の行動"),
+}
+
+
+def build_grade_prompt(title, claim_text, evidence_text, qtype, question, answer):
+    axes = GRADE_AXES[qtype]
+    axes_text = "／".join(axes)
+    axes_lines = "\n".join(f"- {key}: {name}" for key, name in
+                           zip(("accuracy", "example", "conditions", "action"), axes))
+    question_line = f"\n出題文: {html.unescape(question)}" if question else ""  # ページの出題文は HTML の書き方で届く
+    contrast_note = ""
+    if qtype == "contrast":
+        contrast_note = ("\nこの問いは、カードの主張と出題文の「比較対象」の主張を比べる問いです。"
+                         "カードの主張だけを正確に言い直しても accuracy は上がりません。"
+                         "accuracy は、2つの主張がどこで対立し、どこで補い合うかを的確に言えているかで採点します。"
+                         "模範解答例も、対立する点と補完する点をそれぞれ書いてください。")
+    return f"""あなたは学習コーチです。以下のカードの主張と、ユーザーの回答を、問いの型に合わせた4軸で採点してください。
 
 カード「{title}」
 主張: {claim_text}
 根拠: {evidence_text}
-問いの型: {qtype_label}
+問いの型: {QTYPE_LABEL[qtype]}{question_line}
 ユーザーの回答: {answer}
 
-4軸を各0〜2点で採点してください。あわせて、この問いの型に対する模範解答例を1つ書いてください。
-模範解答例は、カードの主張・根拠に沿い、4軸（主張の正確さ／自分の具体例／適用条件と限界／次の行動）をすべて満たす、本人が書いたような一人称の日本語で3〜5文。
-模範解答例で本の内容として書くのは、上の「主張」と「根拠」（ハイライトの引用と本人のメモ）にあることだけにする。根拠にない本の記述・エピソード・数字・人名・用語を付け足したり、根拠にないことを本が述べているかのように書いたりしない。
-「自分の具体例」の部分だけは、主張が当てはまる場面を例として作ってよい（ただし本の内容としては書かない）。
+4軸（各0〜2点）：
+{axes_lines}
+{contrast_note}
+あわせて、この問いの型に対する模範解答例を1つ書いてください。
+模範解答例は、カードの主張・根拠に沿い、4軸（{axes_text}）をすべて満たす、本人が書いたような一人称の日本語で3〜5文。
+模範解答例で本の内容として書くのは、上の「主張」と「根拠」（ハイライトの引用と本人のメモ）と、出題文にある比較対象の主張だけにする。それ以外の本の記述・エピソード・数字・人名・用語を付け足したり、書かれていないことを本が述べているかのように書いたりしない。
+具体例の部分だけは、主張が当てはまる場面を例として作ってよい（ただし本の内容としては書かない）。
 必ず次のJSON形式のみで返してください（説明文やマークダウンは付けない）：
 {{"accuracy": 0-2, "example": 0-2, "conditions": 0-2, "action": 0-2, "feedback": "1〜2文の短いフィードバック（日本語）", "model_answer": "模範解答例（日本語・3〜5文）"}}
 """
+
+
+def grade_with_claude(prompt):
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
         data=json.dumps({"model": MODEL, "max_tokens": 800,
@@ -245,9 +280,9 @@ def grade_with_claude(title, claim_text, evidence_text, qtype_label, answer):
     return json.loads(m.group(0) if m else text)
 
 
-def fetch_grade(card, qtype, answer):
-    return grade_with_claude(card["fm"].get("title", ""), get_claim(card["body"]),
-                             get_evidence(card["body"]), QTYPE_LABEL[qtype], answer)
+def fetch_grade(card, qtype, answer, question=""):
+    return grade_with_claude(build_grade_prompt(card["fm"].get("title", ""), get_claim(card["body"]),
+                                                get_evidence(card["body"]), qtype, question, answer))
 
 
 # ------------------------------------------------------------ 補完（fill）
@@ -393,8 +428,8 @@ def apply_graded(fm, body, qtype, answer, question, result, today):
         next_review = (today + timedelta(days=1)).isoformat()
         verdict = "不合格"
 
-    breakdown = (f"正確さ{result['accuracy']}・具体例{result['example']}・"
-                 f"適用条件{result['conditions']}・次の行動{result['action']}")
+    breakdown = "・".join(f"{label}{result[key]}" for label, key in
+                          zip(SCORE_LABELS[qtype], ("accuracy", "example", "conditions", "action")))
     body = append_history(body, today.isoformat(), QTYPE_LABEL[qtype], f"{score}/8", verdict,
                           result.get("feedback", ""), details=[
                               ("問い", question),
@@ -619,7 +654,7 @@ def handle_request(content_length_header, rfile):
             def apply_fn(c):
                 return apply_fill(c["fm"], c["body"], req.fill_answers, today)
         else:
-            result = fetch_grade(card, req.qtype, req.answer_text)  # Claude はこの1回だけ
+            result = fetch_grade(card, req.qtype, req.answer_text, req.question)  # Claude はこの1回だけ
 
             def apply_fn(c):
                 return apply_graded(c["fm"], c["body"], req.qtype, req.answer_text,

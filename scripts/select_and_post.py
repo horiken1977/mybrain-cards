@@ -113,11 +113,20 @@ async function loadToday() {{
   return res.json();
 }}
 
-function scoreLabel(score) {{
-  return `${{score.total}}/8点（正確さ${{score.accuracy}}・具体例${{score.example}}・適用条件${{score.conditions}}・次の行動${{score.action}}）`;
+// 4軸の短い名前は問いの型ごと（api/grade.py の SCORE_LABELS と同じ）
+const SCORE_LABELS = {{
+  recall: ['正確さ', '具体例', '適用条件', '次の行動'],
+  apply: ['場面', '使い方', '適用条件', '次の行動'],
+  contrast: ['対立・補完', '具体例', '効く条件', '次の行動'],
+  refute: ['成り立たない場面', '理由', '使える範囲', '次の行動'],
+}};
+
+function scoreLabel(score, qtype) {{
+  const l = SCORE_LABELS[qtype] || SCORE_LABELS.recall;
+  return `${{score.total}}/8点（${{l[0]}}${{score.accuracy}}・${{l[1]}}${{score.example}}・${{l[2]}}${{score.conditions}}・${{l[3]}}${{score.action}}）`;
 }}
 
-function renderResult(container, result) {{
+function renderResult(container, result, qtype) {{
   container.innerHTML = '';
   if (!result.ok) {{
     container.innerHTML = '<p class="error">エラー: ' + (result.error || 'unknown') + '</p>';
@@ -129,7 +138,7 @@ function renderResult(container, result) {{
   }}
   const div = document.createElement('div');
   div.className = 'result ' + (result.passed ? 'pass' : 'fail');
-  div.innerHTML = '<div class="score">' + (result.passed ? '合格' : '不合格') + ' ' + scoreLabel(result.score) + '</div>' +
+  div.innerHTML = '<div class="score">' + (result.passed ? '合格' : '不合格') + ' ' + scoreLabel(result.score, qtype) + '</div>' +
                   '<div>' + escapeHtml(result.feedback || '') + '</div>';
   container.appendChild(div);
   if (result.model_answer) {{
@@ -154,7 +163,7 @@ async function submitAnswer(q, answers, btn, resultBox) {{
       body: JSON.stringify({{ date: DATE, card: q.card, qtype: q.qtype, question: q.text || '', answers: answers }}),
     }});
     const result = await resp.json();
-    renderResult(resultBox, result);
+    renderResult(resultBox, result, q.qtype);
     if (result.ok) {{
       btn.closest('section').querySelectorAll('textarea').forEach(t => {{ t.readOnly = true; }});
       if (TEST_MODE) {{
@@ -189,7 +198,7 @@ function renderQuestion(q, index) {{
   if (cached && !TEST_MODE) {{
     inner += '<div class="result-box"></div>';
     section.innerHTML = inner;
-    renderResult(section.querySelector('.result-box'), cached);
+    renderResult(section.querySelector('.result-box'), cached, q.qtype);
     return section;
   }}
 
