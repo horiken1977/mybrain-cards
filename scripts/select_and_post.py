@@ -12,6 +12,8 @@ from lib import (
 
 PAGES_URL = "https://horiken1977.github.io/mybrain-cards/"
 GRADE_ENDPOINT = "https://mybrain-cards.vercel.app/api/grade"
+# 回答済みの元：ハブ（公開 repo）の main のカード。ページは開いたときにここから回答履歴を読む
+CARDS_API = "https://api.github.com/repos/horiken1977/mybrain-cards/contents/"
 LIMIT = int(os.environ.get("RECALL_LIMIT", "1"))
 
 QUESTION_TEXT = {
@@ -101,6 +103,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <script>
 const GRADE_ENDPOINT = {grade_endpoint_js};
 const DATE = {date_js};
+const CARDS_API = {cards_api_js};
 
 // today.json の "test": true のときはテストモード：回答後も「もう一度回答する」で何度でも回答でき、
 // 回答済みのキャッシュ（localStorage）も完了メッセージも使わない
@@ -173,9 +176,7 @@ async function submitAnswer(q, answers, btn, resultBox) {{
         return;
       }}
       try {{ localStorage.setItem(storageKey(q.card), JSON.stringify(result)); }} catch (e) {{ /* ignore */ }}
-      btn.textContent = q.qtype === 'fill' ? '記入済み' : '回答済み';
-      answeredCount += 1;
-      updateDone();
+      markAnswered(btn.closest('section'), q, result);
     }} else {{
       btn.disabled = false;
       btn.textContent = '再送信';
@@ -192,15 +193,6 @@ function renderQuestion(q, index) {{
   section.className = 'q';
 
   let inner = '<h2>Q' + (index + 1) + '. 「' + q.title + '」（' + q.book + '）</h2>';
-
-  let cached = null;
-  try {{ cached = JSON.parse(localStorage.getItem(storageKey(q.card))); }} catch (e) {{ /* ignore */ }}
-  if (cached && !TEST_MODE) {{
-    inner += '<div class="result-box"></div>';
-    section.innerHTML = inner;
-    renderResult(section.querySelector('.result-box'), cached, q.qtype);
-    return section;
-  }}
 
   if (q.qtype === 'fill') {{
     inner += '<p class="sub">まだ内容が確定していないカードです（採点はありません）</p>';
@@ -241,13 +233,82 @@ function renderQuestion(q, index) {{
 const QTYPE_LABELS = {{ recall: '想起', apply: '適用', contrast: '対比・接続', refute: '反証' }};
 
 let totalCount = 0;
-let answeredCount = 0;
+const answered = {{}};  // card -> true（その日に回答済み）
 
 function updateDone() {{
   if (TEST_MODE) return;
-  if (totalCount > 0 && answeredCount >= totalCount) {{
+  const n = Object.keys(answered).length;
+  if (totalCount > 0 && n >= totalCount) {{
     document.getElementById('done').classList.remove('hidden');
   }}
+}}
+
+// 回答済みの問いは結果だけを出す（二重回答を API は拒まないが、ページは送らせない）
+function markAnswered(section, q, result) {{
+  if (!section || !result || !result.ok) return;
+  const h2 = section.querySelector('h2').outerHTML;
+  const state = q.qtype === 'fill' ? '記入済み' : '回答済み';
+  section.innerHTML = h2 + '<p class="sub">' + state + '</p><div class="result-box"></div>';
+  renderResult(section.querySelector('.result-box'), result, q.qtype);
+  answered[q.card] = true;
+  updateDone();
+}}
+
+// ---- ハブのカードの回答履歴から、その日の最新の行を読む（api/grade.py の HIST_RE・append_history と同じ形）
+const HIST_RE = /^- (\\d{{4}}-\\d{{2}}-\\d{{2}}) \\| ([^|\\n]+?) \\| ([^|\\n]*?) \\| ([^|\\n]*?) \\|(.*)$/;
+
+function todayEntry(text, qtype) {{
+  const idx = text.lastIndexOf('## 回答履歴\\n');
+  if (idx === -1) return null;
+  const lines = text.slice(idx).split('\\n');
+  for (let i = 0; i < lines.length; i++) {{
+    const m = HIST_RE.exec(lines[i]);
+    if (!m || m[1] !== DATE) continue;
+    const isFill = m[2].trim() === '補完';
+    if (isFill !== (qtype === 'fill')) continue;
+    const details = {{}};
+    for (let j = i + 1; j < lines.length && lines[j].startsWith('  - '); j++) {{
+      const d = lines[j].slice(4);
+      const k = d.indexOf(': ');
+      if (k > 0) details[d.slice(0, k)] = d.slice(k + 2);
+    }}
+    return {{ label: m[2].trim(), score: m[3].trim(), verdict: m[4].trim(), note: m[5].trim(), details }};
+  }}
+  return null;  // 新しい行ほど上。その日の行がなければ未回答
+}}
+
+function entryToResult(e, qtype) {{
+  if (qtype === 'fill') return {{ ok: true, type: 'fill' }};
+  const nums = (e.details['内訳'] || '').split('・').map(x => {{ const m = /(\\d+)\\s*$/.exec(x); return m ? +m[1] : '-'; }});
+  const total = parseInt(e.score, 10);
+  return {{
+    ok: true, type: 'graded',
+    passed: e.verdict.startsWith('合格'),
+    score: {{ total: isNaN(total) ? e.score : total, accuracy: nums[0] ?? '-', example: nums[1] ?? '-',
+              conditions: nums[2] ?? '-', action: nums[3] ?? '-' }},
+    feedback: e.note,
+    model_answer: e.details['模範解答例'] || '',
+  }};
+}}
+
+async function fetchCardText(card) {{
+  const res = await fetch(CARDS_API + encodeURIComponent(card) + '?ref=main', {{
+    headers: {{ 'Accept': 'application/vnd.github.raw' }}, cache: 'no-store',
+  }});
+  if (!res.ok) throw new Error('HTTP ' + res.status);  // 上限（403/429）・通信の失敗は写しのまま
+  return res.text();
+}}
+
+async function syncFromHub(q, section) {{
+  if (answered[q.card]) return;  // 写しで回答済みなら読み直さない
+  try {{
+    const e = todayEntry(await fetchCardText(q.card), q.qtype);
+    if (!e) return;
+    const result = entryToResult(e, q.qtype);
+    try {{ localStorage.setItem(storageKey(q.card), JSON.stringify(result)); }} catch (err) {{ /* ignore */ }}
+    // 読んでいる間に、このページで送って回答済みにしていれば上書きしない
+    if (!answered[q.card]) markAnswered(section, q, result);
+  }} catch (err) {{ /* 読めないときは localStorage の写しか未回答のまま */ }}
 }}
 
 (async function init() {{
@@ -257,12 +318,21 @@ function updateDone() {{
     document.getElementById('test-banner').classList.remove('hidden');
   }}
   const container = document.getElementById('questions');
-  data.questions.forEach((q, i) => container.appendChild(renderQuestion(q, i)));
   totalCount = data.questions.length;
-  answeredCount = data.questions.filter(q => {{
-    try {{ return !!localStorage.getItem(storageKey(q.card)); }} catch (e) {{ return false; }}
-  }}).length;
-  updateDone();
+  const sections = data.questions.map((q, i) => {{
+    const section = renderQuestion(q, i);
+    container.appendChild(section);
+    return section;
+  }});
+  if (TEST_MODE) return;
+  // まず localStorage の写しを出す（最初の表示を速くするためだけ）
+  data.questions.forEach((q, i) => {{
+    let cached = null;
+    try {{ cached = JSON.parse(localStorage.getItem(storageKey(q.card))); }} catch (e) {{ /* ignore */ }}
+    if (cached) markAnswered(sections[i], q, cached);
+  }});
+  // 続けてハブのカードの回答履歴で決め直す
+  await Promise.all(data.questions.map((q, i) => syncFromHub(q, sections[i])));
 }})();
 </script>
 </body>
@@ -293,6 +363,7 @@ def main():
         date=date,
         grade_endpoint_js=json.dumps(GRADE_ENDPOINT),
         date_js=json.dumps(date),
+        cards_api_js=json.dumps(CARDS_API),
     )
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(page)
