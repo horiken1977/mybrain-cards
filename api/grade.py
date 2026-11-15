@@ -40,6 +40,10 @@ RETRY_WAIT_SEC = 1.0
 DAILY_LIMIT = 30
 USAGE_FILE = "api_usage.json"
 DAILY_LIMIT_MESSAGE = "今日の採点はここまで。明日また"
+# スキップ（2026-11-15〜、フロー .claude/flows/20261115_cards-skip.md の【決定】1）：押したカードは採点せず、
+# 次回確認日をこの日数後にして回答履歴に「スキップ」の行を残す。状態・連続合格は変えない。scripts/lib.py の SKIP_LABEL と同じ
+SKIP_DAYS = 7
+SKIP_LABEL = "スキップ"
 
 # 補完の対象の節と、テンプレート（kindle_update.render_card・/card）が書く未記入の目印の行。
 # scripts/lib.py にも同じものを置く（Vercel の関数は api/ だけで動くので import しない。tests でずれを防ぐ）
@@ -457,6 +461,17 @@ def apply_graded(fm, body, qtype, answer, question, result, today):
     return new_text, response
 
 
+# ------------------------------------------------------------ スキップ
+def apply_skip(fm, body, question, today):
+    """Skip a card: no grading. next_review = today + SKIP_DAYS, status/streak/last_reviewed kept.
+    The history line is `- 日付 | スキップ | - | スキップ | …` (read by HIST_RE and scripts/lib.is_skipped)."""
+    next_review = (today + timedelta(days=SKIP_DAYS)).isoformat()
+    body = append_history(body, today.isoformat(), SKIP_LABEL, "-", SKIP_LABEL,
+                          f"{SKIP_DAYS}日間出さない", details=[("問い", question)])
+    new_text = write_frontmatter(fm, body, {"next_review": next_review})
+    return new_text, {"ok": True, "type": "skip", "next_review": next_review}
+
+
 # ------------------------------------------------------------ 保存と再試行
 def unsaved_of(response):
     """What to return with save_conflict: the grading result (not the state, which was not saved)."""
@@ -549,14 +564,16 @@ def read_and_validate(content_length_header, rfile, today):
         raise ApiError(400, "invalid_card")
 
     qtype = payload.get("qtype")
-    if not isinstance(qtype, str) or qtype not in QTYPE_LABEL:
+    if not isinstance(qtype, str) or (qtype not in QTYPE_LABEL and qtype != "skip"):
         raise ApiError(400, "invalid_qtype")
 
     answers = payload.get("answers")
     if not isinstance(answers, dict):
         raise ApiError(400, "invalid_answers")
     answer_text, fill_answers = "", None
-    if qtype == "fill":
+    if qtype == "skip":
+        pass  # スキップは回答を読まない
+    elif qtype == "fill":
         fill_answers = {}
         for field in ("claim", "why", "scene"):
             s = _optional_str(answers, field, "invalid_answers")
@@ -597,6 +614,8 @@ def read_and_validate(content_length_header, rfile, today):
 def check_blank_answers(req):
     """Blank answers (and fill answers that are just a template placeholder) are answered
     with 200 and the existing error codes, without calling GitHub or Claude."""
+    if req.qtype == "skip":
+        return None
     if req.qtype == "fill":
         if any(not v or is_placeholder_answer(f, v) for f, v in req.fill_answers.items()):
             return {"ok": False, "error": "incomplete_answer"}
@@ -654,7 +673,10 @@ def handle_request(content_length_header, rfile):
             return 200, blank
         reserve_daily_slot(today)  # 上限は Claude を呼ぶ前に確かめる
         card = load_card(req.card)
-        if req.qtype == "fill":
+        if req.qtype == "skip":
+            def apply_fn(c):
+                return apply_skip(c["fm"], c["body"], req.question, today)
+        elif req.qtype == "fill":
             def apply_fn(c):
                 return apply_fill(c["fm"], c["body"], req.fill_answers, today)
         else:

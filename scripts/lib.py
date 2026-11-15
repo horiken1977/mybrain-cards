@@ -192,6 +192,24 @@ def recent_books(today=None):
     return set(books)
 
 
+# スキップ（2026-11-15〜、フロー .claude/flows/20261115_cards-skip.md）：api/grade.py の apply_skip が書く行の型と合否
+SKIP_LABEL = "スキップ"
+
+
+def is_skipped(card, today=None):
+    """回答履歴の最新の行がスキップで、次回確認日が今日より後なら True（補完・採点の両方の候補から外す）。
+    期限が来たら、補完のカードは補完に、採点のカードは期限到来として戻る"""
+    rows = HIST_RE.findall(card["body"])
+    if not rows or rows[0][1].strip() != SKIP_LABEL:
+        return False
+    nr = card["fm"].get("next_review", "").strip()
+    try:
+        d = datetime.strptime(nr, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return d > (today or today_jst())
+
+
 def select_cards(cards, limit=3):
     """Pick up to `limit` (card, qtype) pairs for today, never two from the same
     book. At most MAX_FILL_PER_DAY unfilled cards (fill) come first, then due
@@ -203,6 +221,7 @@ def select_cards(cards, limit=3):
         return PRIORITY_RANK.get(c["fm"].get("priority"), 1)
 
     recent = recent_books()
+    cards = [c for c in cards if not is_skipped(c)]
 
     def rec(c):
         # 直近の本のカードを先に（recent が None なら全部 0 で並びは変わらない）
